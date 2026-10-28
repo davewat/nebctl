@@ -12,49 +12,186 @@ It is one static binary with no dependencies beyond the Go standard library.
 Nebula itself is downloaded from the official `slackhq/nebula` releases and
 checked against the release's `SHASUM256.txt` before it is installed.
 
-## Getting nebctl
+## Setup
 
-Binaries for macOS and Linux are on the
-[releases page](https://github.com/davewat/nebctl/releases). The repo is
-private, so download with `gh` (or copy the binary over with `scp`):
+Set up the lighthouse first: it holds the CA that signs every other host's
+cert. Then add Linux and macOS nodes in any order.
 
+The repo is private, so downloads go through `gh` (signed in to GitHub). If a
+machine has no `gh`, download on your Mac and copy the file over with `scp`.
+
+| Machine | `uname -m` says | File |
+|---|---|---|
+| Linux x86-64 | `x86_64` | `nebctl-linux-amd64` |
+| Linux ARM64 | `aarch64` | `nebctl-linux-arm64` |
+| Linux ARMv5-7 | `armv7l`, `armv6l` | `nebctl-linux-arm` |
+| Apple silicon Mac | `arm64` | `nebctl-darwin-arm64` |
+| Intel Mac | `x86_64` | `nebctl-darwin-amd64` |
+
+### 1. Linux lighthouse
+
+Needs a public IP (or DNS name) and UDP 4242 reachable from the internet.
+
+1. Download and install nebctl:
+   ```bash
+   gh release download v0.1.0 -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
+   sha256sum -c --ignore-missing SHA256SUMS
+   sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
+   ```
+   No `gh` on the server? On your Mac, run the `gh release download` line,
+   then `scp nebctl-linux-amd64 root@<server>:/usr/local/bin/nebctl`, and
+   `chmod 0755 /usr/local/bin/nebctl` on the server.
+2. Run the lighthouse setup. It installs nebula itself if it is missing:
+   ```bash
+   sudo nebctl lighthouse
+   ```
+3. Answer the questions:
+
+   | Question | Answer |
+   |---|---|
+   | Install the latest release now? | Enter for yes |
+   | How should this host get its certificate? | `1` Create a new CA (a new network), or `2` Import an existing CA (see below) |
+   | Name for the CA | your organisation or domain, e.g. `Example.com` |
+   | Nebula network | the private range for the network, e.g. `10.42.0.0/22` |
+   | Years the CA is valid | Enter for 5; every host cert expires with the CA |
+   | Protect ca.key with a passphrase? | Enter for no, or `y` to be asked on every signing |
+   | Host name for the cert | this server's name, e.g. `hs01.example.com` |
+   | Nebula address | Enter for the first free address, or type one |
+   | Groups | Enter for none |
+   | UDP port to listen on | Enter for 4242 |
+   | Public IP or DNS name | Enter if the detected IP is right, else type it |
+   | Relay traffic for hosts that can't reach each other directly? | Enter for yes |
+   | What may other Nebula hosts reach on this one? | `1` Ping and SSH |
+   | Other ports to open | e.g. `tcp/443`, or Enter for none |
+   | Sign a cert for another host now? | `y` once per host, then `n` (or do it later, see step 6) |
+
+4. Open the UDP port, here and in your cloud provider's firewall:
+   ```bash
+   sudo ufw allow 4242/udp
+   ```
+5. Check that nebula is running:
+   ```bash
+   sudo nebctl status
+   ```
+   ```bash
+   journalctl -u nebula -f
+   ```
+6. Sign a cert for each other host. Each run prints a **bundle**: copy
+   everything from `-----BEGIN NEBCTL BUNDLE-----` to the `END` line.
+   ```bash
+   sudo nebctl ca sign
+   ```
+   The bundle holds that host's private key, so move it over SSH or a
+   password manager, not chat or email. To keep keys off the lighthouse, use
+   a request instead (see [Keeping a node's key on the node](#keeping-a-nodes-key-on-the-node)).
+
+**Already have a CA?** In step 3, choose `2` Import an existing CA and give
+the path to `ca.crt` (e.g. `/data/ca.crt`); `ca.key` is looked for beside it.
+Certs that CA already signed in the same directory are recorded, so their
+addresses are never handed out again. Signing one of those names again
+renews it at the same address. To give a host the cert files you made
+earlier, instead of a new cert:
 ```bash
-gh release download v0.1.0 -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
-shasum -a 256 -c --ignore-missing SHA256SUMS
-sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
+sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.com.key
 ```
 
-Pick `nebctl-darwin-arm64` (Apple silicon), `nebctl-darwin-amd64` (Intel
-Mac), `nebctl-linux-amd64`, `nebctl-linux-arm64` or `nebctl-linux-arm`.
+### 2. Linux node
 
-## A new network in three steps
+1. Download and install nebctl:
+   ```bash
+   gh release download v0.1.0 -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
+   sha256sum -c --ignore-missing SHA256SUMS
+   sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
+   ```
+2. On the lighthouse, sign a cert for this node and copy the bundle:
+   ```bash
+   sudo nebctl ca sign
+   ```
+3. On the node, run the node setup:
+   ```bash
+   sudo nebctl node
+   ```
+4. Answer the questions:
 
-1. **On the lighthouse** (a machine with a public IP):
-   `sudo nebctl lighthouse` → *Create a new CA here*. It installs nebula,
-   creates the CA, signs the lighthouse's cert, writes the config, starts the
-   service, then offers to sign certs for other hosts. Each one comes out as a
-   **bundle**: a block of text to paste on that host.
-2. **On each other host**: `sudo nebctl node` → *Paste a bundle*.
-3. Check with `nebctl status`, then `ping` the lighthouse's Nebula address.
+   | Question | Answer |
+   |---|---|
+   | Install the latest release now? | Enter for yes |
+   | How should this host get its certificate? | `1` Paste a bundle, then paste it |
+   | What may other Nebula hosts reach on this one? | `1` Ping and SSH |
+   | Other ports to open | the ports this node serves, e.g. `tcp/443`, or Enter for none |
 
-### Keeping private keys on their own machines
+5. Check it reaches the lighthouse (use the lighthouse's Nebula address):
+   ```bash
+   ping 10.42.0.1
+   ```
+   ```bash
+   sudo nebctl status
+   ```
 
-The bundle from `ca sign` carries the new host's private key. To avoid moving
-keys around, use a request instead:
+### 3. macOS node
 
-1. On the new host: `sudo nebctl node` → *Keep the private key here*. It
-   prints a **request** that contains only the public key.
-2. On the CA host: `sudo nebctl ca sign-request`, then paste the request.
-   You get back a bundle with no key in it, which is safe to send by chat.
-3. Paste that bundle back on the new host.
+1. Download and install nebctl (`nebctl-darwin-amd64` on an Intel Mac):
+   ```bash
+   gh release download v0.1.0 -R davewat/nebctl -p nebctl-darwin-arm64 -p SHA256SUMS
+   shasum -a 256 -c --ignore-missing SHA256SUMS
+   sudo mkdir -p /usr/local/bin
+   sudo install -m 0755 nebctl-darwin-arm64 /usr/local/bin/nebctl
+   ```
+   Downloaded through a browser instead? Clear the quarantine flag first:
+   `xattr -d com.apple.quarantine nebctl-darwin-arm64`.
+2. On the lighthouse, sign a cert for this Mac and copy the bundle:
+   ```bash
+   sudo nebctl ca sign
+   ```
+3. On the Mac, run the node setup:
+   ```bash
+   sudo nebctl node
+   ```
+4. Answer the questions:
 
-### Already have a CA and certs?
+   | Question | Answer |
+   |---|---|
+   | Install the latest release now? | Enter for yes |
+   | How should this host get its certificate? | `1` Paste a bundle, then paste it |
+   | What may other Nebula hosts reach on this one? | `2` Ping only (or `1` if you SSH into this Mac) |
+   | Other ports to open | Enter for none |
 
-On the lighthouse, `sudo nebctl lighthouse` → *Import an existing CA*, and
-point it at your `ca.crt`. Any certs that CA has already signed and that sit
-in the same directory are recorded, so their addresses are never handed out
-again. To give an existing cert to its host, run
-`sudo nebctl ca bundle -crt fe01.crt -key fe01.key`.
+   If macOS asks whether `nebula` may accept incoming connections, allow it.
+5. Check it reaches the lighthouse:
+   ```bash
+   ping 10.42.0.1
+   ```
+   ```bash
+   sudo nebctl status
+   ```
+   ```bash
+   tail -f /var/log/nebula.log
+   ```
+
+### Keeping a node's key on the node
+
+Instead of steps 2 to 4 above, so the private key never leaves the node:
+
+1. On the node, make a request. It holds only the public key, so chat or
+   email is fine:
+   ```bash
+   sudo nebctl request
+   ```
+2. On the lighthouse, paste the request and copy the bundle it prints:
+   ```bash
+   sudo nebctl ca sign-request
+   ```
+3. On the node, run `sudo nebctl node`, choose `1` Paste a bundle, and paste it.
+
+### Later
+
+| Task | Command |
+|---|---|
+| Update nebula on any host (restarts it) | `sudo nebctl update` |
+| Change a host's firewall or lighthouses | `sudo nebctl node` (or `lighthouse`), keep the cert, answer again |
+| Renew a host's cert | on the lighthouse `sudo nebctl ca sign` with the same name; on the host `sudo nebctl node`, answer `n` to "Keep it?", paste the bundle |
+| List every signed cert | `sudo nebctl ca list` |
+| Stop or start nebula | `sudo nebctl service stop` / `start` |
 
 ## Where things go
 
