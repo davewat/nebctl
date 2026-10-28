@@ -1,0 +1,129 @@
+package netconf
+
+import (
+	"fmt"
+	"net/netip"
+	"strconv"
+	"strings"
+)
+
+// Files are the paths config.yml points at.
+type Files struct {
+	CACrt, HostCrt, HostKey string
+	State                   string // nebctl.json, named in the header
+}
+
+// Render writes nebula's config.yml for h. On macOS the tun device is left
+// for nebula to pick (it must be a utun device).
+func Render(h Host, f Files, goos string) string {
+	var b strings.Builder
+	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
+	q := strconv.Quote
+
+	self := ""
+	if p, err := netip.ParsePrefix(h.NebulaIP); err == nil {
+		self = p.Addr().String()
+	}
+	var others []Lighthouse
+	for _, l := range h.Lighthouses {
+		if l.NebulaIP != self {
+			others = append(others, l)
+		}
+	}
+	lighthouse := h.Role == RoleLighthouse
+
+	w("# Written by nebctl from %s.", f.State)
+	w("# Run `sudo nebctl config` to regenerate; edits here are overwritten.")
+	w("pki:")
+	w("  ca: %s", q(f.CACrt))
+	w("  cert: %s", q(f.HostCrt))
+	w("  key: %s", q(f.HostKey))
+	w("")
+	if len(others) == 0 {
+		w("static_host_map: {}")
+	} else {
+		w("static_host_map:")
+		for _, l := range others {
+			eps := make([]string, len(l.Endpoints))
+			for i, e := range l.Endpoints {
+				eps[i] = q(e)
+			}
+			w("  %s: [%s]", q(l.NebulaIP), strings.Join(eps, ", "))
+		}
+	}
+	w("")
+	w("lighthouse:")
+	if lighthouse {
+		w("  am_lighthouse: true")
+	} else {
+		w("  am_lighthouse: false")
+		w("  interval: 60")
+		w("  hosts:")
+		for _, l := range others {
+			w("    - %s", q(l.NebulaIP))
+		}
+	}
+	w("")
+	w("listen:")
+	w("  host: %s", q("0.0.0.0"))
+	w("  port: %d", h.ListenPort)
+	w("")
+	w("punchy:")
+	w("  punch: true")
+	w("  respond: true")
+	w("")
+	w("relay:")
+	if lighthouse {
+		w("  am_relay: %t", h.Relay)
+		w("  use_relays: false")
+	} else {
+		var relays []string
+		for _, l := range others {
+			if l.Relay {
+				relays = append(relays, l.NebulaIP)
+			}
+		}
+		w("  use_relays: %t", len(relays) > 0)
+		if len(relays) > 0 {
+			w("  relays:")
+			for _, r := range relays {
+				w("    - %s", q(r))
+			}
+		}
+	}
+	w("")
+	w("tun:")
+	if goos == "darwin" {
+		w("  disabled: false")
+	} else {
+		w("  dev: nebula1")
+	}
+	w("")
+	w("logging:")
+	w("  level: info")
+	w("  format: text")
+	w("")
+	w("firewall:")
+	w("  outbound:")
+	w("    - port: any")
+	w("      proto: any")
+	w("      host: any")
+	if len(h.Inbound) == 0 {
+		w("  inbound: []")
+	} else {
+		w("  inbound:")
+		for _, r := range h.Inbound {
+			w("    - port: %s", q(r.Port))
+			w("      proto: %s", r.Proto)
+			switch {
+			case r.Group != "":
+				w("      group: %s", q(r.Group))
+			case r.Host != "":
+				w("      host: %s", q(r.Host))
+			default:
+				w("      host: any")
+			}
+		}
+	}
+	return b.String()
+}
