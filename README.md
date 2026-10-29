@@ -34,7 +34,7 @@ Needs a public IP (or DNS name) and UDP 4242 reachable from the internet.
 
 1. Download and install nebctl:
    ```bash
-   gh release download v0.1.0 -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
+   gh release download -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
    ```
@@ -106,7 +106,7 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
 
 1. Download and install nebctl:
    ```bash
-   gh release download v0.1.0 -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
+   gh release download -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
    ```
@@ -139,7 +139,7 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
 
 1. Download and install nebctl (`nebctl-darwin-amd64` on an Intel Mac):
    ```bash
-   gh release download v0.1.0 -R davewat/nebctl -p nebctl-darwin-arm64 -p SHA256SUMS
+   gh release download -R davewat/nebctl -p nebctl-darwin-arm64 -p SHA256SUMS
    shasum -a 256 -c --ignore-missing SHA256SUMS
    sudo mkdir -p /usr/local/bin
    sudo install -m 0755 nebctl-darwin-arm64 /usr/local/bin/nebctl
