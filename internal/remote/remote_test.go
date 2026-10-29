@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/davewat/nebctl/internal/admin"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -59,13 +61,7 @@ func startServer(t *testing.T, password string, hostKey ed25519.PrivateKey) *ser
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &ssh.ServerConfig{PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
-		if string(pw) == password {
-			return nil, nil
-		}
-		return nil, errors.New("no")
-	}}
-	cfg.AddHostKey(signer)
+	cfg := serverConfig(password, signer)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +78,35 @@ func startServer(t *testing.T, password string, hostKey ed25519.PrivateKey) *ser
 		}
 	}()
 	return s
+}
+
+// serverConfig accepts the password, or a key in $HOME/.ssh/authorized_keys
+// (where AuthorizeKey writes, since the server's shells share $HOME).
+func serverConfig(password string, hostKey ssh.Signer) *ssh.ServerConfig {
+	cfg := &ssh.ServerConfig{
+		PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
+			if string(pw) == password {
+				return nil, nil
+			}
+			return nil, errors.New("no")
+		},
+		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			data, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".ssh", "authorized_keys"))
+			for len(data) > 0 {
+				k, _, _, rest, err := ssh.ParseAuthorizedKey(data)
+				if err != nil {
+					break
+				}
+				if bytes.Equal(k.Marshal(), key.Marshal()) {
+					return nil, nil
+				}
+				data = rest
+			}
+			return nil, errors.New("no")
+		},
+	}
+	cfg.AddHostKey(hostKey)
+	return cfg
 }
 
 func (s *server) serve(nc net.Conn, cfg *ssh.ServerConfig) {
@@ -201,6 +226,38 @@ func TestDialTrustAuthSudoAndRun(t *testing.T) {
 	if st, err := os.Stat(c.InstallPath); err != nil || st.Mode().Perm() != 0o755 {
 		t.Errorf("installed file: %v %v", st, err)
 	}
+
+	// A password login can install the console's key; the next login uses it.
+	if c.KeyLogin {
+		t.Error("a password login was reported as a key login")
+	}
+	keys := admin.Keys{Dir: t.TempDir()}
+	pub, err := keys.EnsureConsoleKey("nebctl-console@test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := c.AuthorizeKey(pub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".ssh", "authorized_keys"))
+	if strings.Count(string(data), "nebctl-console@test") != 1 {
+		t.Errorf("authorized_keys should hold the key once:\n%s", data)
+	}
+	if err := c.AuthorizeKey("not a key; rm -rf /"); err == nil {
+		t.Error("a non-key line was accepted")
+	}
+	keyOnly := o
+	keyOnly.Password, keyOnly.KeyFiles = "", []string{keys.ConsoleKey()}
+	k, err := Dial(keyOnly, known)
+	if err != nil {
+		t.Fatalf("logging in with the console key: %v", err)
+	}
+	defer k.Close()
+	if !k.KeyLogin {
+		t.Error("the key login wasn't reported as one")
+	}
 }
 
 func TestChangedHostKey(t *testing.T) {
@@ -256,13 +313,7 @@ func startServerAt(t *testing.T, password string, key ed25519.PrivateKey, addr s
 		t.Skip("couldn't reuse the port:", err)
 	}
 	signer, _ := ssh.NewSignerFromKey(key)
-	cfg := &ssh.ServerConfig{PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
-		if string(pw) == password {
-			return nil, nil
-		}
-		return nil, errors.New("no")
-	}}
-	cfg.AddHostKey(signer)
+	cfg := serverConfig(password, signer)
 	s.ln, s.addr = ln, addr
 	t.Cleanup(func() { ln.Close() })
 	go func() {

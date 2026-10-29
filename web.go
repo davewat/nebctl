@@ -309,6 +309,7 @@ func (c *console) routes() {
 	m.HandleFunc("POST /api/targets", c.addTarget)
 	m.HandleFunc("POST /api/targets/install", c.addTarget)
 	m.HandleFunc("DELETE /api/targets/{id}", c.dropTarget)
+	m.HandleFunc("POST /api/targets/{id}/save-key", c.saveKey)
 	m.HandleFunc("POST /api/link", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"url": c.link() + "&embedded=0"})
 	})
@@ -615,6 +616,7 @@ func (c *console) addTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	install := in.Install || strings.HasSuffix(r.URL.Path, "/install")
+	in.KeyFiles = []string{c.a.adminKeys().ConsoleKey()}
 	conn, err := remote.Dial(in.Options, filepath.Join(c.a.cfgDir(), "admin", "known_hosts"))
 	var hk *remote.HostKeyError
 	var need *remote.NeedError
@@ -684,7 +686,38 @@ func (c *console) addTarget(w http.ResponseWriter, r *http.Request) {
 	c.targets[id] = t
 	c.mu.Unlock()
 	ok = true
-	writeJSON(w, http.StatusOK, targetOut{ID: id, Label: t.label, Kind: "ssh", Host: in.Host, User: in.User, Role: t.role, HaveCA: t.ca})
+	writeJSON(w, http.StatusOK, struct {
+		targetOut
+		CanSaveKey bool `json:"canSaveKey"`
+	}{targetOut{ID: id, Label: t.label, Kind: "ssh", Host: in.Host, User: in.User, Role: t.role, HaveCA: t.ca}, !conn.KeyLogin})
+}
+
+// saveKey puts the console's key in the login user's authorized_keys on a
+// connected machine, so the next connection logs in without a password.
+func (c *console) saveKey(w http.ResponseWriter, r *http.Request) {
+	c.mu.Lock()
+	t := c.targets[r.PathValue("id")]
+	c.mu.Unlock()
+	if t == nil {
+		writeErr(w, http.StatusNotFound, errors.New("that machine isn't connected any more: connect to it again"))
+		return
+	}
+	host := hostname()
+	if host == "" {
+		host = "this machine"
+	}
+	pub, err := c.a.adminKeys().EnsureConsoleKey("nebctl-console@" + strings.ReplaceAll(host, " ", "-"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("making the console's key: %w", err))
+		return
+	}
+	if err := t.conn.AuthorizeKey(pub); err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": fmt.Sprintf(
+		"The console's key is in %s's authorized_keys on %s. Next time it logs in without the SSH password; sudo may still ask for one. To remove it, delete the line ending in nebctl-console@%s there.",
+		t.opts.User, t.opts.Host, host)})
 }
 
 var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)

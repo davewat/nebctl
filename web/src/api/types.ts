@@ -8,6 +8,8 @@ export interface Target {
   user?: string;
   role?: 'lighthouse' | 'node';
   haveCa: boolean;
+  /** Only on a connect: a password logged in, so offer to save a key. */
+  canSaveKey?: boolean;
 }
 
 export interface ConnectBody {

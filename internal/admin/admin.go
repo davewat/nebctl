@@ -31,6 +31,36 @@ type Keys struct {
 func (k Keys) HostKey() string   { return filepath.Join(k.Dir, "ssh_host_ed25519_key") }
 func (k Keys) ClientKey() string { return filepath.Join(k.Dir, "nebctl_ed25519") }
 
+// ConsoleKey is the key the web console logs in to other machines with,
+// once its public half is in their authorized_keys.
+func (k Keys) ConsoleKey() string { return filepath.Join(k.Dir, "console_ed25519") }
+
+// EnsureConsoleKey makes the console key once and returns its public half
+// as an authorized_keys line, commented so it can be told apart there.
+func (k Keys) EnsureConsoleKey(comment string) (string, error) {
+	if err := os.MkdirAll(k.Dir, 0o700); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(k.ConsoleKey()); err != nil {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return "", err
+		}
+		block, err := ssh.MarshalPrivateKey(priv, comment)
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(k.ConsoleKey(), pem.EncodeToMemory(block), 0o600); err != nil {
+			return "", err
+		}
+	}
+	signer, err := k.signer(k.ConsoleKey())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " " + comment, nil
+}
+
 // Ensure makes both keys once. It returns the client's public key in
 // authorized_keys form, for config.yml.
 func (k Keys) Ensure() (string, error) {

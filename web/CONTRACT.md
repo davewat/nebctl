@@ -42,7 +42,12 @@ interface Target {
     acceptHostKey?: string;     // the fingerprint the user confirmed
   }
   ```
-  - `200` -> `Target` (connected and ready).
+  - `200` -> `Target & { canSaveKey: boolean }` (connected and ready).
+    `canSaveKey` is true when a password, not a key, logged in. Then offer:
+    "Log in to <host> with a key next time?" and, on yes, call
+    `POST /api/targets/{id}/save-key` -> `{ message }`, which installs the
+    console's own public key in that user's `~/.ssh/authorized_keys`. The
+    console tries that key first on every connection.
   - `409` -> `{ hostKey: { fingerprint: string; type: string; changed: boolean } }`:
     the host key is new (or changed). Show it, ask the user to confirm, and
     resend with `acceptHostKey`. `changed: true` deserves a loud warning.

@@ -5,7 +5,11 @@ import type { ConnectBody, HostKeyInfo, MissingNebctl, NeedField, Target } from 
 import { Button, Dialog, ErrorText, Field, Notice } from '../ui';
 
 type Auth = 'agent' | 'password' | 'key';
-type Stage = { kind: 'form' } | { kind: 'hostkey'; info: HostKeyInfo } | { kind: 'install'; info: MissingNebctl };
+type Stage =
+  | { kind: 'form' }
+  | { kind: 'hostkey'; info: HostKeyInfo }
+  | { kind: 'install'; info: MissingNebctl }
+  | { kind: 'savekey'; target: Target; saved?: string };
 
 const NEED_TEXT: Record<NeedField, string> = {
   password: 'SSH needs a password for this user.',
@@ -55,7 +59,8 @@ export function ConnectDialog({ onClose, onConnected }: { onClose: () => void; o
     setNeed(null);
     try {
       const t = await call(body(accept));
-      onConnected(t);
+      if (t.canSaveKey) setStage({ kind: 'savekey', target: t });
+      else onConnected(t);
     } catch (e) {
       if (e instanceof ApiError) {
         const b = e.body as { hostKey?: HostKeyInfo } & Partial<MissingNebctl>;
@@ -84,6 +89,61 @@ export function ConnectDialog({ onClose, onConnected }: { onClose: () => void; o
   };
 
   const hostLabel = host.trim() || 'that machine';
+
+  if (stage.kind === 'savekey') {
+    const { target, saved } = stage;
+    const done = () => onConnected(target);
+    const save = async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const r = await api.saveKey(target.id);
+        setStage({ kind: 'savekey', target, saved: r.message });
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setBusy(false);
+      }
+    };
+    return (
+      <Dialog
+        title={saved ? `Key added on ${hostLabel}` : `Log in to ${hostLabel} with a key next time?`}
+        onClose={done}
+        busy={busy}
+        footer={
+          saved ? (
+            <Button variant="primary" onClick={done}>
+              Done
+            </Button>
+          ) : (
+            <>
+              <Button onClick={done} disabled={busy}>
+                Not now
+              </Button>
+              <Button variant="primary" busy={busy} onClick={() => void save()}>
+                Add the console's key
+              </Button>
+            </>
+          )
+        }
+      >
+        {saved ? (
+          <p>{saved}</p>
+        ) : (
+          <>
+            <p>
+              You signed in with a password. The console can add its own key to {target.user ?? user}'s{' '}
+              <span className="mono">~/.ssh/authorized_keys</span> on {hostLabel}, so next time it connects without the SSH password.
+            </p>
+            <p className="dim">
+              Only the key's public half goes there; the private half stays on this machine, readable by root only. Your own SSH keys aren't copied. sudo may still ask for its password.
+            </p>
+          </>
+        )}
+        <ErrorText>{error}</ErrorText>
+      </Dialog>
+    );
+  }
 
   if (stage.kind === 'hostkey') {
     const { info } = stage;
@@ -202,7 +262,7 @@ export function ConnectDialog({ onClose, onConnected }: { onClose: () => void; o
           {(['agent', 'password', 'key'] as Auth[]).map((a) => (
             <label key={a} className="radio">
               <input type="radio" name="auth" checked={auth === a} onChange={() => setAuth(a)} />
-              <span>{a === 'agent' ? 'ssh-agent' : a === 'password' ? 'Password' : 'Key file'}</span>
+              <span>{a === 'agent' ? 'Saved key or ssh-agent' : a === 'password' ? 'Password' : 'Key file'}</span>
             </label>
           ))}
         </fieldset>

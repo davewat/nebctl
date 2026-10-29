@@ -283,6 +283,14 @@ runs `sudo nebctl app ...` there, so the CA key never leaves the lighthouse.
 If nebctl is missing or older there, it offers to install a matching one.
 Trusted host keys are kept in `/etc/nebula/admin/known_hosts`.
 
+After a password login, the console offers to add its own key to that
+user's `~/.ssh/authorized_keys` there, so next time **Saved key or
+ssh-agent** connects without the SSH password (sudo may still ask for its
+own). Only the public half is copied. The private half stays in
+`/etc/nebula/admin/console_ed25519`, readable by root only, and your own SSH
+keys aren't touched. To revoke it, delete the line ending in
+`nebctl-console@<this machine>` from that file.
+
 **Revoking a cert.** Nebula has no central revocation: each host refuses a
 cert only when the cert's fingerprint is on its own blocklist. After revoking,
 the console offers to push the list to every machine it is connected to.
@@ -379,7 +387,7 @@ sudo ufw delete allow OpenSSH
 | `/etc/systemd/system/nebula.service` | the Linux service; with DNS on, it also routes the domain to the lighthouses each time nebula starts |
 | `/etc/resolver/<domain>` | on macOS with DNS on: sends lookups for the Nebula domain to the lighthouses |
 | `/Library/LaunchDaemons/net.nebctl.nebula.plist` | the macOS service; logs go to `/var/log/nebula.log` |
-| `/etc/nebula/admin/` (0700) | the admin server's host key, nebctl's key for it, and `known_hosts` for machines the console connects to |
+| `/etc/nebula/admin/` (0700) | the admin server's host key, nebctl's key for it, the console's SSH key (`console_ed25519`), and `known_hosts` for machines the console connects to |
 | `/etc/rsyslog.d/60-nebctl-siem.conf` | with SIEM forwarding on (Linux): sends nebula's log lines to the SIEM |
 
 Back up `/etc/nebula/ca/ca.key` somewhere offline. Host certs expire when the

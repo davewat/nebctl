@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/user"
@@ -31,6 +32,9 @@ type Options struct {
 	Passphrase    string `json:"passphrase"`
 	SudoPassword  string `json:"sudo_password"`
 	AcceptHostKey string `json:"accept_host_key"`
+	// KeyFiles are tried first, quietly skipped when missing (the console's
+	// own key).
+	KeyFiles []string `json:"-"`
 }
 
 func (o Options) addr() string {
@@ -71,7 +75,9 @@ type Conn struct {
 	mu         sync.Mutex
 	client     *ssh.Client
 	noPassword bool // sudo needs no password there
-	Nebctl     string
+	// KeyLogin is true when a key, not a password, logged in.
+	KeyLogin bool
+	Nebctl   string
 	// InstallPath is where Install puts nebctl.
 	InstallPath string
 }
@@ -92,7 +98,8 @@ func Dial(o Options, knownHosts string) (*Conn, error) {
 
 func (c *Conn) dial() error {
 	o := c.opts
-	auth, closer, err := authMethods(o)
+	used := false
+	auth, closer, err := authMethods(o, &used)
 	if closer != nil {
 		defer closer()
 	}
@@ -120,10 +127,23 @@ func (c *Conn) dial() error {
 		return fmt.Errorf("connecting to %s: %w", o.addr(), err)
 	}
 	c.client = client
+	c.KeyLogin = used
 	return nil
 }
 
-func authMethods(o Options) ([]ssh.AuthMethod, func(), error) {
+// signedSigner records that the server accepted its key: a client signs
+// only once the server says the key may log in.
+type signedSigner struct {
+	ssh.Signer
+	used *bool
+}
+
+func (s signedSigner) Sign(r io.Reader, data []byte) (*ssh.Signature, error) {
+	*s.used = true
+	return s.Signer.Sign(r, data)
+}
+
+func authMethods(o Options, used *bool) ([]ssh.AuthMethod, func(), error) {
 	var methods []ssh.AuthMethod
 	var closer func()
 	var signers []ssh.Signer
@@ -158,6 +178,9 @@ func authMethods(o Options) ([]ssh.AuthMethod, func(), error) {
 		signers = append(signers, s)
 		return nil
 	}
+	for _, p := range o.KeyFiles {
+		addKey(p, "", false)
+	}
 	if o.KeyPath != "" {
 		if err := addKey(o.KeyPath, o.Passphrase, true); err != nil {
 			return nil, nil, err
@@ -168,6 +191,9 @@ func authMethods(o Options) ([]ssh.AuthMethod, func(), error) {
 			addKey(p, o.Passphrase, false)
 		}
 	}
+	// Without an agent, the console's key and the default keys may still
+	// work; say what's missing only when nothing else is left to try.
+	var agentErr error
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" && (o.UseAgent || o.Password == "") {
 		if conn, err := net.Dial("unix", sock); err == nil {
 			closer = func() { conn.Close() }
@@ -175,12 +201,18 @@ func authMethods(o Options) ([]ssh.AuthMethod, func(), error) {
 				signers = append(signers, agentSigners...)
 			}
 		} else if o.UseAgent {
-			return nil, nil, fmt.Errorf("ssh-agent: %w", err)
+			agentErr = fmt.Errorf("ssh-agent: %w", err)
 		}
 	} else if o.UseAgent {
-		return nil, nil, errors.New("no ssh-agent here: start the console with `sudo --preserve-env=SSH_AUTH_SOCK nebctl web`, or use a key file or password")
+		agentErr = errors.New("no ssh-agent here: start the console with `sudo --preserve-env=SSH_AUTH_SOCK nebctl web`, or use a key file or password")
+	}
+	if len(signers) == 0 && o.Password == "" && agentErr != nil {
+		return nil, closer, agentErr
 	}
 	if len(signers) > 0 {
+		for i, sg := range signers {
+			signers[i] = signedSigner{sg, used}
+		}
 		methods = append(methods, ssh.PublicKeys(signers...))
 	}
 	if o.Password != "" {
@@ -415,6 +447,22 @@ func (c *Conn) Install(binary []byte) error {
 		return fmt.Errorf("copying nebctl there: %v %s", err, strings.TrimSpace(string(errb)))
 	}
 	c.Nebctl = c.InstallPath
+	return nil
+}
+
+// AuthorizeKey adds an authorized_keys line to the login user's
+// ~/.ssh/authorized_keys there, once, so the matching key logs in next time.
+func (c *Conn) AuthorizeKey(line string) error {
+	line = strings.TrimSpace(line)
+	if strings.ContainsAny(line, "\n\r") || !strings.HasPrefix(line, "ssh-") {
+		return errors.New("that isn't a public key line")
+	}
+	q := Quote(line)
+	script := `umask 077 && mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && ` +
+		`{ grep -qxF ` + q + ` ~/.ssh/authorized_keys || printf '%s\n' ` + q + ` >> ~/.ssh/authorized_keys; }`
+	if _, err := c.Output(script); err != nil {
+		return fmt.Errorf("adding the key to %s's authorized_keys: %w", c.opts.User, err)
+	}
 	return nil
 }
 

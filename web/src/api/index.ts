@@ -25,6 +25,7 @@ export const api = {
   // The contract doesn't say what install returns; it is treated like a connect (a Target).
   install: (b: ConnectBody) => request<Target>('POST', '/api/targets/install', { ...b, install: true }),
   disconnect: (id: string) => request<void>('DELETE', `/api/targets/${encodeURIComponent(id)}`),
+  saveKey: (id: string) => request<{ message: string }>('POST', `/api/targets/${encodeURIComponent(id)}/save-key`),
 
   // a fresh one-time link to this console (for "Open in browser" from the Mac app)
   link: () => request<{ url: string }>('POST', '/api/link'),

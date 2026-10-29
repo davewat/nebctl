@@ -320,16 +320,20 @@ function connect(b: ConnectBody, installing: boolean): Target {
   if (installing) installed.add(host);
 
   const id = slug(host);
+  const canSaveKey = !!b.password && !keyed.has(host);
   const existing = dbs.get(id);
-  if (existing) return existing.target;
+  if (existing) return { ...existing.target, canSaveKey };
   const short = host.split('.')[0];
   const target: Target = { id, label: host, kind: 'ssh', host, user: b.user, role: 'node', haveCa: false };
   const me: MHost = { name: short, ip: '10.42.0.99', groups: [], days: 200, remotes: [], mode: 'direct' };
   const db = buildDb(target, me, { ...nodeHost(me), name: full(short) });
   db.peers = db.peers.filter((p) => p.vpnAddr !== me.ip);
   dbs.set(id, db);
-  return target;
+  return { ...target, canSaveKey };
 }
+
+// Hosts whose authorized_keys hold the console's key (save-key).
+const keyed = new Set<string>();
 
 // ---- helpers for each endpoint ---------------------------------------------
 
@@ -684,6 +688,13 @@ export async function handle(method: string, path: string, body: unknown): Promi
   if (p === '/api/targets/install' && method === 'POST') {
     await sleep(LATENCY * 4);
     return connect(b as unknown as ConnectBody, true);
+  }
+  const save = p.match(/^\/api\/targets\/([^/]+)\/save-key$/);
+  if (save && method === 'POST') {
+    const d = dbs.get(decodeURIComponent(save[1]));
+    if (!d || !d.target.host) throw new ApiError(404, 'That machine isn\'t connected any more: connect to it again.');
+    keyed.add(d.target.host);
+    return { message: `The console's key is in ${d.target.user}'s authorized_keys on ${d.target.host}. Next time it logs in without the SSH password; sudo may still ask for one. To remove it, delete the line ending in nebctl-console@mac01 there.` };
   }
   const del = p.match(/^\/api\/targets\/([^/]+)$/);
   if (del && method === 'DELETE') {
