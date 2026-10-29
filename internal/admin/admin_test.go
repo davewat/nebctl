@@ -10,7 +10,7 @@ import (
 // relayed through the lighthouse (whose remote prints as the zero address).
 const hostmap = `[
  {"vpnAddrs":["10.42.0.2"],"localIndex":11,"remoteIndex":22,"remoteAddrs":["198.51.100.7:4242"],
-  "cert":{"details":{"name":"fe01.nebula.example.com","networks":["10.42.0.2/22"],"groups":["web"],
+  "cert":{"details":{"name":"fe01.example.internal","networks":["10.42.0.2/22"],"groups":["web"],
   "notAfter":"2027-10-29T00:10:53-04:00","isCa":false},"fingerprint":"abc","version":2},
   "messageCounter":42,"currentRemote":"198.51.100.7:4242","currentRelaysToMe":[],"currentRelaysThroughMe":["10.42.0.3"]},
  {"vpnAddrs":["10.42.0.9"],"localIndex":1,"remoteIndex":2,"remoteAddrs":null,
@@ -24,7 +24,7 @@ func TestPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	direct, relayed := hs[0].peer(false), hs[1].peer(true)
-	if direct.VpnAddr != "10.42.0.2" || direct.Name != "fe01.nebula.example.com" || direct.CurrentRemote != "198.51.100.7:4242" ||
+	if direct.VpnAddr != "10.42.0.2" || direct.Name != "fe01.example.internal" || direct.CurrentRemote != "198.51.100.7:4242" ||
 		direct.MessageCounter != 42 || !reflect.DeepEqual(direct.Groups, []string{"web"}) ||
 		!reflect.DeepEqual(direct.RelaysFor, []string{"10.42.0.3"}) || direct.Fingerprint != "abc" || direct.NotAfter.Year() != 2027 {
 		t.Errorf("direct: %+v", direct)

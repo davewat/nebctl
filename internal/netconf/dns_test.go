@@ -7,9 +7,9 @@ import (
 
 func TestQualify(t *testing.T) {
 	for _, tc := range []struct{ name, domain, want string }{
-		{"fe01", "nebula.example.com", "fe01.nebula.example.com"},
-		{"fe01.nebula.example.com", "nebula.example.com", "fe01.nebula.example.com"},
-		{"fe01.example.com", "nebula.example.com", "fe01.example.com"}, // a dotted name is taken as typed
+		{"fe01", "example.internal", "fe01.example.internal"},
+		{"fe01.example.internal", "example.internal", "fe01.example.internal"},
+		{"fe01.example.com", "example.internal", "fe01.example.com"}, // a dotted name is taken as typed
 		{"fe01", "", "fe01"},
 	} {
 		if got := Qualify(tc.name, tc.domain); got != tc.want {
@@ -19,7 +19,7 @@ func TestQualify(t *testing.T) {
 }
 
 func TestValidDomain(t *testing.T) {
-	for _, ok := range []string{"nebula.example.com", "nebula.internal", "Nebula.Example.com.", "neb"} {
+	for _, ok := range []string{"example.internal", "nebula.internal", "Nebula.Example.com.", "neb"} {
 		if err := ValidDomain(ok); err != nil {
 			t.Errorf("ValidDomain(%q) = %v", ok, err)
 		}

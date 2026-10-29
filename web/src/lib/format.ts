@@ -2,7 +2,7 @@ import type { Peer } from '../api/types';
 
 export const EXPIRY_WARN_DAYS = 30;
 
-/** "fe01.nebula.example.com" -> "fe01" */
+/** "fe01.example.internal" -> "fe01" */
 export const shortName = (name: string): string => name.split('.')[0] || name;
 
 export function daysUntil(iso: string): number {

@@ -248,7 +248,7 @@ export function ConnectDialog({ onClose, onConnected }: { onClose: () => void; o
       >
         <p className="dim span-all">The console signs in over SSH and runs nebctl there with sudo. Nothing you type here is stored.</p>
         <Field label="Host" htmlFor="c-host" className="grow">
-          <input id="c-host" value={host} onChange={(e) => { setHost(e.target.value); setAcceptHostKey(undefined); }} placeholder="lh.nebula.example.com" autoComplete="off" spellCheck={false} />
+          <input id="c-host" value={host} onChange={(e) => { setHost(e.target.value); setAcceptHostKey(undefined); }} placeholder="lh.example.internal" autoComplete="off" spellCheck={false} />
         </Field>
         <Field label="Port" htmlFor="c-port">
           <input id="c-port" value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" className="narrow" />

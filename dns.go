@@ -19,19 +19,24 @@ import (
 
 const resolverHeader = "# Written by nebctl: names under this domain are looked up over Nebula."
 
-// defaultDomain suggests nebula.<a domain the names point at>: the CA's
-// name when it is a domain, else the domain of a host name such as
-// hs01.example.com. Failing both, nebula.internal (reserved for private use).
+// defaultDomain suggests <name>.internal. The .internal suffix is reserved
+// for private networks, so it never clashes with a real domain. The name
+// comes from the CA's name or a host's domain: solidpath.com, or a host
+// hs01.solidpath.com, gives solidpath.internal. Failing both, nebula.internal.
 func defaultDomain(caName string, hostNames ...string) string {
 	try := []string{netconf.CleanDomain(caName)}
 	for _, h := range hostNames {
 		if _, parent, ok := strings.Cut(netconf.CleanDomain(h), "."); ok {
-			try = append(try, strings.TrimPrefix(parent, "nebula."))
+			try = append(try, parent)
 		}
 	}
 	for _, d := range try {
-		if strings.Contains(d, ".") && netconf.ValidDomain("nebula."+d) == nil {
-			return "nebula." + d
+		if strings.HasSuffix(d, ".internal") && netconf.ValidDomain(d) == nil {
+			return d
+		}
+		name, _, _ := strings.Cut(strings.TrimPrefix(d, "nebula."), ".")
+		if name != "" && name != "nebula" && netconf.ValidDomain(name+".internal") == nil {
+			return name + ".internal"
 		}
 	}
 	return "nebula.internal"
@@ -48,7 +53,7 @@ func issuedNames(n *netconf.Network) []string {
 // askDomain asks for the network's DNS domain; blank means no DNS.
 func (a *app) askDomain(def string) (string, error) {
 	a.p.Println("\nHosts can find each other by name over Nebula, e.g. web01." + def + ".")
-	a.p.Println("Use a domain only Nebula uses: the lighthouse answers nothing outside it.")
+	a.p.Println("Keep the .internal ending: it is reserved for private networks, so it never clashes with a real domain.")
 	d, err := a.p.AskValid("Domain for Nebula host names (- for none)", def, func(s string) error {
 		if strings.TrimSpace(s) == "-" {
 			return nil

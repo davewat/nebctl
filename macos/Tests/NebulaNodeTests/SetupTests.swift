@@ -26,7 +26,7 @@ struct SetupTests {
         try sh("/usr/bin/env", ["go", "build", "-o", nebctl, "."], in: repo)
         let cert = bin.appendingPathComponent("nebula-cert").path
         try sh(cert, ["ca", "-name", "test", "-out-crt", "ca.crt", "-out-key", "ca.key"], in: certs)
-        try sh(cert, ["sign", "-ca-crt", "ca.crt", "-ca-key", "ca.key", "-name", "mac01.nebula.example.com",
+        try sh(cert, ["sign", "-ca-crt", "ca.crt", "-ca-key", "ca.key", "-name", "mac01.example.internal",
                       "-networks", "10.42.0.5/24", "-out-crt", "mac01.crt", "-out-key", "mac01.key"], in: certs)
         setenv("NEBCTL_BIN", nebctl, 1)
         setenv("NEBCTL_ROOT", root.path, 1)
@@ -52,7 +52,7 @@ struct SetupTests {
         await s.certNext()
         #expect(s.error == nil)
         #expect(s.step == .lighthouses)
-        #expect(s.newCert?.name == "mac01.nebula.example.com")
+        #expect(s.newCert?.name == "mac01.example.internal")
         #expect(s.lighthouses.count == 1) // one blank to fill in
 
         s.lighthouses[0].nebulaIp = "10.42.0"
@@ -81,7 +81,7 @@ struct SetupTests {
         #expect(s.step == .done)
         #expect(s.log.contains("Try it: ping 10.42.0.1"))
         let h = try #require(s.state?.host)
-        #expect(h.name == "mac01.nebula.example.com")
+        #expect(h.name == "mac01.example.internal")
         #expect(h.lighthouses?.first?.endpoints == ["lh.example.com:4242"])
         #expect(h.inbound?.map(\.label) == ["ping from any host", "tcp/22 from any host", "tcp/443 from any host"])
 
@@ -98,8 +98,8 @@ struct SetupTests {
         await s.refresh()
         s.start()
         s.certSource = .bundle
-        s.bundleText = try bundle(domain: "nebula.example.com", lighthouse: [
-            "name": "lh.nebula.example.com", "nebula_ip": "10.42.0.1",
+        s.bundleText = try bundle(domain: "example.internal", lighthouse: [
+            "name": "lh.example.internal", "nebula_ip": "10.42.0.1",
             "endpoints": ["203.0.113.9:4242"], "relay": true, "dns": true,
         ])
         await s.certNext()
@@ -109,13 +109,13 @@ struct SetupTests {
         await s.lighthousesNext()
         await s.firewallNext()
         #expect(s.step == .dns)
-        #expect(s.domain == "nebula.example.com")
+        #expect(s.domain == "example.internal")
         #expect(s.dnsServers == ["10.42.0.1"])
         s.step = .review
         await s.apply()
         #expect(s.error == nil)
         #expect(s.state?.host?.resolve == true)
-        let resolver = try String(contentsOf: root.appendingPathComponent("etc/resolver/nebula.example.com"), encoding: .utf8)
+        let resolver = try String(contentsOf: root.appendingPathComponent("etc/resolver/example.internal"), encoding: .utf8)
         #expect(resolver.contains("nameserver 10.42.0.1"))
     }
 
@@ -159,7 +159,7 @@ struct SetupTests {
     private func bundle(domain: String, lighthouse: [String: Any]) throws -> String {
         func read(_ f: String) throws -> String { try String(contentsOf: certs.appendingPathComponent(f), encoding: .utf8) }
         let json = try JSONSerialization.data(withJSONObject: [
-            "v": 1, "name": "mac01.nebula.example.com", "ca_crt": try read("ca.crt"),
+            "v": 1, "name": "mac01.example.internal", "ca_crt": try read("ca.crt"),
             "host_crt": try read("mac01.crt"), "host_key": try read("mac01.key"),
             "lighthouses": [lighthouse], "domain": domain,
         ] as [String: Any])

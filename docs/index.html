@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nebctl: light up your Nebula network</title>
-<meta name="description" content="nebctl sets up Nebula on Linux and macOS: the lighthouse, the certificate authority and every machine that joins. Nebula Node does the Mac side in a window.">
-<meta property="og:title" content="nebctl">
-<meta property="og:description" content="One lighthouse. Every machine you own, on one network.">
-<meta property="og:image" content="https://davewat.github.io/nebctl/app.png">
+<title>Nebula Node: run your Nebula network from your Mac</title>
+<meta name="description" content="Nebula Node joins your Mac to a Nebula network and runs an admin console for all of it. nebctl sets up the lighthouse on your Linux server.">
+<meta property="og:title" content="Nebula Node and nebctl">
+<meta property="og:description" content="Run your Nebula network from your Mac.">
+<meta property="og:image" content="https://davewat.github.io/nebctl/img/console-map.jpg">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23070B1A'/%3E%3Ccircle cx='16' cy='16' r='9' fill='%23FDBA74' opacity='.3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FDBA74'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -43,143 +43,131 @@
       radial-gradient(35% 30% at 80% 80%, rgba(253,186,116,.10), transparent 70%),
       #070B1A;
   }
+  .shot { box-shadow: 0 40px 100px -30px rgba(244,114,182,.35); }
 </style>
 </head>
 <body class="bg-night text-star font-sans antialiased">
 
-<!-- Hero: a live mesh behind the words -->
-<section class="nebula-bg relative min-h-[92vh] flex flex-col overflow-hidden">
+<section class="nebula-bg relative min-h-[88vh] flex flex-col overflow-hidden">
   <canvas id="mesh" class="absolute inset-0 w-full h-full" aria-hidden="true"></canvas>
   <header class="relative max-w-6xl w-full mx-auto px-5 sm:px-8 py-6 flex items-center justify-between">
     <a href="./" class="flex items-center gap-2.5 font-semibold text-white text-lg">
       <span class="relative w-3 h-3"><span class="absolute inset-0 rounded-full bg-ember"></span><span class="absolute -inset-1.5 rounded-full bg-ember/30"></span></span>
-      nebctl
+      Nebula Node
     </a>
     <nav class="flex items-center gap-6 text-sm text-dim">
-      <a href="#how" class="hidden sm:inline hover:text-white">How it works</a>
-      <a href="#download" class="hover:text-white">Download</a>
+      <a href="#install" class="hover:text-white">Install</a>
+      <a href="#console" class="hidden sm:inline hover:text-white">Console</a>
       <a href="https://github.com/davewat/nebctl" class="hover:text-white">GitHub</a>
     </nav>
   </header>
 
   <div class="relative flex-1 flex items-center">
     <div class="max-w-6xl w-full mx-auto px-5 sm:px-8 py-16">
-      <h1 class="max-w-4xl text-5xl sm:text-6xl lg:text-7xl font-light tracking-tight text-white leading-[1.02]">
-        One lighthouse.<br>Every machine you own,<br><span class="font-semibold">on one network.</span>
+      <h1 class="max-w-3xl text-5xl sm:text-6xl lg:text-7xl font-light tracking-tight text-white leading-[1.04]">
+        Run your Nebula network from your Mac.
       </h1>
       <p class="mt-8 max-w-xl text-lg text-star/90 leading-relaxed">
-        nebctl sets up <a class="text-white underline decoration-flare/60 underline-offset-4 hover:decoration-flare" href="https://github.com/slackhq/nebula">Nebula</a>, the mesh network Slack built, on Linux and macOS. It makes the certificates, writes the configs, starts the services and gives every machine a name.
+        Nebula Node puts your Mac on a <a class="text-white underline decoration-flare/60 underline-offset-4 hover:decoration-flare" href="https://github.com/slackhq/nebula">Nebula</a> network and gives you one console for all of it. nebctl sets up the lighthouse on your Linux server.
       </p>
       <div class="mt-10 flex flex-wrap gap-3">
         <a href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip" class="rounded-full bg-ember text-night font-semibold px-6 py-3.5 hover:bg-white">Download for Mac</a>
-        <a href="#download" class="rounded-full border border-star/30 text-white font-semibold px-6 py-3.5 hover:border-white backdrop-blur-sm">Linux command-line tool</a>
+        <a href="#install" class="rounded-full border border-star/30 text-white font-semibold px-6 py-3.5 hover:border-white backdrop-blur-sm">How to set it up</a>
       </div>
+      <p class="mt-5 text-sm text-dim">macOS 14 or later. Free.</p>
     </div>
   </div>
 </section>
 
-<main>
-  <!-- How it works: vertical timeline -->
-  <section id="how" class="max-w-6xl mx-auto px-5 sm:px-8 py-24 grid lg:grid-cols-[1fr_1.4fr] gap-14">
-    <div class="lg:sticky lg:top-10 self-start">
-      <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight">From one server to a whole network</h2>
-      <p class="mt-4 text-dim leading-relaxed">Only the lighthouse needs a public address. Every other machine checks in with it once, then talks to the others directly.</p>
+<main id="install">
+  <!-- 1. The Mac app -->
+  <section class="max-w-6xl mx-auto px-5 sm:px-8 pt-24 pb-16 grid lg:grid-cols-[1fr_1.15fr] gap-12 items-start">
+    <div class="min-w-0">
+      <p class="text-ember font-semibold">Step 1</p>
+      <h2 class="mt-2 text-3xl sm:text-4xl font-semibold text-white tracking-tight">Install Nebula Node</h2>
+      <ol class="mt-6 space-y-4 text-star/90 leading-relaxed list-decimal pl-5 marker:text-dim">
+        <li><a class="text-white underline decoration-flare/60 underline-offset-4 hover:decoration-flare" href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip">Download it</a>, unzip it, and drag <b class="text-white font-semibold">Nebula Node</b> to Applications.</li>
+        <li>In Terminal, clear the download flag (the app isn't notarized yet) and make it root's (it runs its tools as root):</li>
+      </ol>
+      <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto">sudo xattr -cr "/Applications/Nebula Node.app"
+sudo chown -R root:wheel "/Applications/Nebula Node.app"</pre>
     </div>
-    <ol class="min-w-0 relative border-l border-edge ml-3 space-y-14">
-      <li class="pl-10 relative">
-        <span class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-ember ring-4 ring-night"></span>
-        <p class="text-sm text-dim">On a server with a public address</p>
-        <h3 class="mt-1 text-xl font-semibold text-white">Light the lighthouse</h3>
-        <p class="mt-2 text-star/80 leading-relaxed">nebctl installs Nebula, creates the certificate authority, signs the lighthouse's own cert and starts the service.</p>
-        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto"><span class="text-flare">$</span> sudo nebctl lighthouse
-<span class="text-dim">Nebula network:</span> 10.42.0.0/22
-<span class="text-dim">Domain for Nebula host names [nebula.example.com]:</span>
-<span class="text-dim">Answer DNS for *.nebula.example.com? [Y/n]:</span></pre>
-      </li>
-      <li class="pl-10 relative">
-        <span class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-flare ring-4 ring-night"></span>
-        <p class="text-sm text-dim">On the lighthouse</p>
-        <h3 class="mt-1 text-xl font-semibold text-white">Sign a cert for a machine</h3>
-        <p class="mt-2 text-star/80 leading-relaxed">It prints a bundle, one block of text with the machine's cert and key, the lighthouses and the domain.</p>
-        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto"><span class="text-flare">$</span> sudo nebctl ca sign
-<span class="text-dim">Host name for the cert:</span> mac01
-<span class="text-dim">-----BEGIN NEBCTL BUNDLE-----</span>
-<span class="text-dim">H4sIAAAAAAAC/+RXW4+iyhZ+5r8w7zuDY...</span></pre>
-      </li>
-      <li class="pl-10 relative">
-        <span class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-indigo-400 ring-4 ring-night"></span>
-        <p class="text-sm text-dim">On the new machine</p>
-        <h3 class="mt-1 text-xl font-semibold text-white">Paste it in</h3>
-        <p class="mt-2 text-star/80 leading-relaxed">With Nebula Node on a Mac, or one command on Linux. The machine joins, gets its name and reconnects at every boot.</p>
-        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto"><span class="text-flare">$</span> sudo nebctl node
-<span class="text-dim">Installed the cert for mac01.nebula.example.com</span>
-<span class="text-ember">Try it: ping 10.42.0.1</span></pre>
-      </li>
-    </ol>
+    <img src="img/app.png" width="1240" height="558" alt="The Nebula Node window: this Mac is mac01.example.internal at 10.42.0.12, checking in with the lighthouse at 10.42.0.1." class="shot w-full rounded-2xl ring-1 ring-white/10">
   </section>
 
-  <!-- Mac app -->
-  <section class="relative">
-    <div class="absolute inset-0 -z-10 bg-[radial-gradient(50%_60%_at_30%_50%,rgba(99,102,241,.18),transparent_70%)]"></div>
-    <div class="max-w-6xl mx-auto px-5 sm:px-8 py-24 grid lg:grid-cols-[1.25fr_1fr] gap-14 items-center">
-      <img src="app.png" width="1240" height="558" alt="The Nebula Node window showing a Mac set up as mac01.nebula.example.com, checking in with the lighthouse 10.42.0.1." class="rounded-2xl ring-1 ring-white/10 shadow-[0_40px_100px_-30px_rgba(244,114,182,.45)]">
-      <div>
-        <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight">Nebula Node, the Mac app</h2>
-        <p class="mt-4 text-star/80 leading-relaxed">No Terminal needed on the Mac. Paste the bundle, check the lighthouses and what other machines may reach, and it does the rest. macOS asks for your password when it changes anything.</p>
-        <dl class="mt-8 space-y-5">
-          <div><dt class="font-semibold text-white">Your key, your Mac</dt><dd class="text-dim mt-1">It can make the key on the Mac and send only a request to be signed.</dd></div>
-          <div><dt class="font-semibold text-white">At a glance</dt><dd class="text-dim mt-1">The cert's expiry and whether Nebula is running, with Start, Stop and Restart.</dd></div>
-        </dl>
+  <!-- 2. The lighthouse -->
+  <section class="border-t border-edge">
+    <div class="max-w-6xl mx-auto px-5 sm:px-8 py-16 grid lg:grid-cols-[1fr_1.15fr] gap-12 items-start">
+      <div class="min-w-0">
+        <p class="text-ember font-semibold">Step 2</p>
+        <h2 class="mt-2 text-3xl sm:text-4xl font-semibold text-white tracking-tight">Set up the lighthouse</h2>
+        <p class="mt-6 text-star/90 leading-relaxed">SSH to a Linux server with a public IP and install nebctl:</p>
+        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto">curl -LO https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64
+sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
+sudo nebctl lighthouse</pre>
+        <p class="mt-4 text-star/90 leading-relaxed">Press Enter to take the defaults. Then open UDP 4242 in the server's firewall, and run <code class="font-mono text-white">sudo nebctl ca sign</code> to make a bundle for your Mac.</p>
       </div>
-    </div>
-  </section>
-
-  <!-- Features -->
-  <section class="max-w-6xl mx-auto px-5 sm:px-8 py-24 border-t border-edge">
-    <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight max-w-2xl">The parts that are easy to get wrong, done right</h2>
-    <div class="mt-14 grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-edge rounded-2xl overflow-hidden ring-1 ring-edge">
-      <div class="bg-night p-7"><h3 class="font-semibold text-white">Names, not numbers</h3><p class="mt-2 text-dim text-[15px] leading-relaxed"><span class="font-mono text-star">ssh fe01.nebula.example.com</span>, from any machine on the network.</p></div>
-      <div class="bg-night p-7"><h3 class="font-semibold text-white">Keys that never travel</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">A machine can make its own key; the lighthouse signs only the public half.</p></div>
-      <div class="bg-night p-7"><h3 class="font-semibold text-white">Checked installs</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">Official Nebula releases, checked against their checksums. One command to update.</p></div>
-      <div class="bg-night p-7"><h3 class="font-semibold text-white">A lighthouse check-up</h3><p class="mt-2 text-dim text-[15px] leading-relaxed"><span class="font-mono text-star">nebctl audit</span> reviews the server facing the internet, with the fix for each finding.</p></div>
-      <div class="bg-night p-7"><h3 class="font-semibold text-white">Renewals that keep addresses</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">Sign the same name again to renew. A warning comes 30 days ahead.</p></div>
-      <div class="bg-night p-7"><h3 class="font-semibold text-white">Tested configs</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">Every config passes <span class="font-mono text-star">nebula -test</span> before it's used.</p></div>
-    </div>
-  </section>
-
-  <!-- Download -->
-  <section id="download" class="max-w-6xl mx-auto px-5 sm:px-8 py-24 border-t border-edge">
-    <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight">Download</h2>
-    <p class="mt-4 text-dim">Always the latest release, each file checkable against <span class="font-mono">SHA256SUMS</span>.</p>
-    <div class="mt-12 grid md:grid-cols-[1fr_1.4fr] gap-6">
-      <a href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip" class="min-w-0 group rounded-2xl bg-gradient-to-br from-flare/20 to-indigo-500/10 ring-1 ring-flare/30 p-8 hover:ring-flare">
-        <h3 class="text-2xl font-semibold text-white">Nebula Node for Mac</h3>
-        <p class="mt-2 text-star/80">Apple silicon and Intel, macOS 14 or later.</p>
-        <span class="mt-8 inline-block rounded-full bg-ember text-night font-semibold px-5 py-2.5 group-hover:bg-white">Download</span>
-        <p class="mt-6 text-sm text-dim">After unzipping it into Applications, make it root's and clear the download flag (it isn't notarized yet): <span class="font-mono text-star break-all">sudo chown -R root:wheel "/Applications/Nebula Node.app" &amp;&amp; sudo xattr -cr "/Applications/Nebula Node.app"</span></p>
-      </a>
-      <div class="min-w-0 rounded-2xl bg-deep ring-1 ring-edge p-8">
-        <h3 class="text-2xl font-semibold text-white">Command-line tool</h3>
-        <div class="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
-          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64">Linux x86-64</a>
-          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-arm64">Linux ARM64</a>
-          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-arm">Linux ARMv5-7</a>
-          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-darwin-arm64">macOS Apple silicon</a>
-          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-darwin-amd64">macOS Intel</a>
+      <figure class="min-w-0">
+        <div class="rounded-2xl ring-1 ring-white/10 bg-[#0A0F22] overflow-hidden shot">
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-edge">
+            <span class="w-3 h-3 rounded-full bg-[#FF5F57]"></span><span class="w-3 h-3 rounded-full bg-[#FEBC2E]"></span><span class="w-3 h-3 rounded-full bg-[#28C840]"></span>
+            <span class="ml-3 text-xs text-dim font-mono">you@lh: ~</span>
+          </div>
+<pre class="font-mono text-[12.5px] leading-6 p-5 overflow-x-auto text-star/90"><span class="text-flare">$</span> sudo nebctl lighthouse
+Install the latest release now? [Y/n]:
+Installed nebula 1.12.0 into /usr/local/bin (checksums verified).
+How should this host get its certificate?
+  1) Create a new CA here, then sign this lighthouse's cert
+Choose [1]:
+Name for the CA (your organisation or domain) [Nebula CA]: <span class="text-ember">example</span>
+Nebula network; every host gets an address in it [10.42.0.0/22]:
+Domain for Nebula host names (- for none) [example.internal]:
+Host name for the cert (a short name gets .example.internal): <span class="text-ember">lh</span>
+Public IP or DNS name other hosts reach this machine at [203.0.113.10]:
+<span class="text-dim">…</span>
+Wrote /etc/nebula/config.yml (nebula -test passed).
+nebula is running and starts at boot.</pre>
         </div>
-        <pre class="mt-6 font-mono text-[12.5px] leading-6 bg-night border border-edge rounded-xl p-4 overflow-x-auto">curl -LO https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64
-curl -LO https://github.com/davewat/nebctl/releases/latest/download/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
-sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl</pre>
+        <figcaption class="mt-3 text-sm text-dim">Names end in <span class="font-mono text-star">.internal</span>, which is reserved for private networks.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- 3. Join the Mac -->
+  <section class="border-t border-edge">
+    <div class="max-w-6xl mx-auto px-5 sm:px-8 py-16"><div class="max-w-3xl">
+      <p class="text-ember font-semibold">Step 3</p>
+      <h2 class="mt-2 text-3xl sm:text-4xl font-semibold text-white tracking-tight">Join your Mac</h2>
+      <p class="mt-6 text-star/90 leading-relaxed">Open Nebula Node, click <b class="text-white font-semibold">Set Up This Mac as a Node</b>, and paste the bundle. It installs nebula and starts it at boot. Your Mac can then reach each host by name, like <span class="font-mono text-white">ssh lh.example.internal</span>.</p>
+    </div></div>
+  </section>
+
+  <!-- 4. The console -->
+  <section id="console" class="border-t border-edge">
+    <div class="max-w-6xl mx-auto px-5 sm:px-8 py-16">
+      <p class="text-ember font-semibold">Step 4</p>
+      <h2 class="mt-2 text-3xl sm:text-4xl font-semibold text-white tracking-tight">Manage it all from one console</h2>
+      <p class="mt-6 max-w-2xl text-star/90 leading-relaxed">Click <b class="text-white font-semibold">Open Admin Console</b> in Nebula Node, then connect to your lighthouse over SSH.</p>
+      <img src="img/console-map.jpg" width="1800" height="1068" alt="The console's map: the lighthouse at the centre with its hosts around it, direct and relayed tunnels, one host handshaking and one with a revoked cert." class="shot mt-10 w-full rounded-2xl ring-1 ring-white/10" loading="lazy">
+      <div class="mt-10 grid md:grid-cols-2 gap-8">
+        <figure class="min-w-0">
+          <img src="img/console-certs.jpg" width="1800" height="1068" alt="The Certificates page: the CA, and each host's cert with Renew and Revoke." class="w-full rounded-xl ring-1 ring-white/10" loading="lazy">
+          <figcaption class="mt-3 text-star/90"><b class="text-white font-semibold">Certificates.</b> Add a machine, renew a cert, or revoke one everywhere.</figcaption>
+        </figure>
+        <figure class="min-w-0">
+          <img src="img/console-health.jpg" width="1800" height="1265" alt="The Health page: versions with an Update button, the service, and the security audit." class="w-full rounded-xl ring-1 ring-white/10" loading="lazy">
+          <figcaption class="mt-3 text-star/90"><b class="text-white font-semibold">Health.</b> Update nebula, restart it, and run a security audit.</figcaption>
+        </figure>
       </div>
+      <p class="mt-10 text-dim">Also: firewall rules, logs, and forwarding logs to your SIEM.</p>
     </div>
   </section>
 </main>
 
 <footer class="border-t border-edge">
   <div class="max-w-6xl mx-auto px-5 sm:px-8 py-10 text-sm text-dim flex flex-col sm:flex-row gap-3 sm:justify-between">
-    <p>nebctl on <a class="text-star hover:text-white" href="https://github.com/davewat/nebctl">GitHub</a></p>
-    <p>Nebula is <a class="text-star hover:text-white" href="https://github.com/slackhq/nebula">slackhq/nebula</a>; nebctl isn't affiliated with it.</p>
+    <p>Linux only, or prefer the command line? <a class="text-star hover:text-white underline underline-offset-4 decoration-edge" href="https://github.com/davewat/nebctl#readme">See the README</a>.</p>
+    <p>Nebula is <a class="text-star hover:text-white" href="https://github.com/slackhq/nebula">slackhq/nebula</a>. This project isn't affiliated with it.</p>
   </div>
 </footer>
 

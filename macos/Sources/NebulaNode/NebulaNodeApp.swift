@@ -12,6 +12,8 @@ struct NebulaNodeApp: App {
         }
         .windowResizability(.contentMinSize)
 
+        // Opens from its button; if macOS reopens it at launch, ConsoleView
+        // closes it again.
         Window("Nebula Admin Console", id: "console") {
             ConsoleView(setup: setup)
         }

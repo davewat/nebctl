@@ -201,7 +201,7 @@ function Console({ initial }: { initial: Target[] }) {
               </li>
             ))}
           </ul>
-          {isMock && <p className="mock-note">Sample data. Nothing here is a real machine.</p>}
+          {isMock && !new URLSearchParams(location.search).has('clean') && <p className="mock-note">Sample data. Nothing here is a real machine.</p>}
         </nav>
 
         <main className="main" id="main">

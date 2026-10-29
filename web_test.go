@@ -65,13 +65,13 @@ func TestRsyslogRule(t *testing.T) {
 
 func TestPlanCert(t *testing.T) {
 	a := &app{}
-	n := &netconf.Network{CIDR: "10.42.0.0/24", Domain: "nebula.example.com", Issued: []netconf.Issued{
-		{Name: "lh.nebula.example.com", NebulaIP: "10.42.0.1/24"},
+	n := &netconf.Network{CIDR: "10.42.0.0/24", Domain: "example.internal", Issued: []netconf.Issued{
+		{Name: "lh.example.internal", NebulaIP: "10.42.0.1/24"},
 		{Name: "fe01.example.com", NebulaIP: "10.42.0.2/24", Groups: []string{"web"}},
-		{Name: "be01.nebula.example.com", NebulaIP: "10.42.0.3/24", Groups: []string{"db"}},
+		{Name: "be01.example.internal", NebulaIP: "10.42.0.3/24", Groups: []string{"db"}},
 	}}
 	r, err := a.planCert(n, "new01", "", nil, false)
-	if err != nil || r.name != "new01.nebula.example.com" || r.ip.String() != "10.42.0.4/24" {
+	if err != nil || r.name != "new01.example.internal" || r.ip.String() != "10.42.0.4/24" {
 		t.Errorf("new: %+v %v", r, err)
 	}
 	r, _ = a.planCert(n, "be01", "", nil, false) // renewal keeps address and groups

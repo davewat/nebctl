@@ -16,7 +16,7 @@ var DNSRule = Rule{Port: "53", Proto: "udp", Host: "any"}
 
 var labelRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// ValidDomain accepts a DNS domain such as nebula.example.com.
+// ValidDomain accepts a DNS domain such as example.internal.
 func ValidDomain(s string) error {
 	s = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
 	if s == "" {
@@ -24,7 +24,7 @@ func ValidDomain(s string) error {
 	}
 	for _, l := range strings.Split(s, ".") {
 		if !labelRe.MatchString(l) {
-			return errors.New("use letters, digits and '-' between dots, e.g. nebula.example.com")
+			return errors.New("use letters, digits and '-' between dots, e.g. example.internal")
 		}
 	}
 	return nil
@@ -36,7 +36,7 @@ func CleanDomain(d string) string {
 }
 
 // Qualify appends domain to a short name: "fe01" becomes
-// "fe01.nebula.example.com". A name with a dot is left alone.
+// "fe01.example.internal". A name with a dot is left alone.
 func Qualify(name, domain string) string {
 	name = strings.TrimSpace(name)
 	if domain == "" || name == "" || strings.Contains(name, ".") {
@@ -87,7 +87,7 @@ func (n *Network) Remove(name string) {
 
 // Renames finds the cert a new name under the network's domain replaces:
 // one with the same first label outside the domain, as when fe01.example.com
-// becomes fe01.nebula.example.com.
+// becomes fe01.example.internal.
 func (n *Network) Renames(name string) (Issued, bool) {
 	if !Under(name, n.Domain) {
 		return Issued{}, false

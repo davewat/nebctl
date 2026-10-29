@@ -41,7 +41,7 @@ import type {
 const DAY = 864e5;
 const params = new URLSearchParams(location.search);
 const LATENCY = params.has('latency') ? Number(params.get('latency')) || 0 : 300;
-const DOMAIN = 'nebula.example.com';
+const DOMAIN = 'example.internal';
 const NEBCTL = 'v0.5.0';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -477,7 +477,7 @@ function audit(db: Db): Finding[] {
     { section: 'Nebula', level: 'pass', title: 'Nebula runs as a service', detail: 'systemd unit nebula.service is enabled and active.' },
     { section: 'Nebula', level: 'pass', title: 'Config passes nebula -test' },
     { section: 'Nebula', level: 'warn', title: 'A newer nebula is available', detail: `Installed ${db.state.nebula}, latest ${db.latest}.`, fix: ['sudo nebctl update'] },
-    { section: 'Certificates', level: 'warn', title: 'A host cert expires in 12 days', detail: 'nas01.nebula.example.com ends soon. Renew it on the Certificates page, or sign the same name again.', fix: ['sudo nebctl ca sign   # name: nas01'] },
+    { section: 'Certificates', level: 'warn', title: 'A host cert expires in 12 days', detail: 'nas01.example.internal ends soon. Renew it on the Certificates page, or sign the same name again.', fix: ['sudo nebctl ca sign   # name: nas01'] },
     { section: 'Certificates', level: 'pass', title: 'The CA has more than a year left' },
     { section: 'Certificates', level: 'info', title: 'ca.key is not passphrase protected', detail: 'Anyone who can read /etc/nebula/ca.key can sign certs. It is readable by root only.' },
     { section: 'SSH', level: 'fail', title: 'Root can sign in with a password', detail: 'PermitRootLogin and PasswordAuthentication are both on in /etc/ssh/sshd_config. This server faces the internet.', fix: ["sudo sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config", "sudo sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config", 'sudo systemctl reload ssh'] },

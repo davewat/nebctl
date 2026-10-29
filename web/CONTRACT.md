@@ -22,7 +22,7 @@ the console runs `sudo nebctl app ...`.
 ```ts
 interface Target {
   id: string;            // "local", or an id the server makes
-  label: string;         // "This Mac (mac01)", "lh.nebula.example.com"
+  label: string;         // "This Mac (mac01)", "lh.example.internal"
   kind: "local" | "ssh";
   host?: string;         // ssh only: "203.0.113.10" or a name
   user?: string;
@@ -101,7 +101,7 @@ interface Rule { port: string; proto: "any" | "tcp" | "udp" | "icmp"; host?: str
 ```ts
 interface Peer {
   vpnAddr: string;              // "10.42.0.2"
-  name: string;                 // from its cert, "fe01.nebula.example.com"
+  name: string;                 // from its cert, "fe01.example.internal"
   groups: string[];
   notAfter: string;             // its cert's expiry
   fingerprint: string;

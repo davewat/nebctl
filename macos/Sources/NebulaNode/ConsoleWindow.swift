@@ -6,17 +6,17 @@ import WebKit
 /// console, and its "Open in browser" button, open in the default browser.
 struct ConsoleView: View {
     let setup: Setup
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         if let url = setup.consoleURL {
             ConsoleWebView(url: url) { setup.consoleURL = nil }
                 .frame(minWidth: 960, minHeight: 640)
         } else {
-            VStack(spacing: 12) {
-                Text("The admin console isn't running.").font(.title3)
-                Text("Open it from the Nebula Node window.").foregroundStyle(.secondary)
-            }
-            .frame(minWidth: 480, minHeight: 240)
+            // Restored at launch with nothing to show: close it.
+            Color.clear
+                .frame(minWidth: 480, minHeight: 240)
+                .onAppear { dismissWindow(id: "console") }
         }
     }
 }
