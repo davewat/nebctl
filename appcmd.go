@@ -46,6 +46,10 @@ type appState struct {
 	Service   string        `json:"service"`
 	Hostname  string        `json:"hostname"`
 	ConfigDir string        `json:"config_dir"`
+	Admin     struct {
+		Enabled bool   `json:"enabled"`
+		Listen  string `json:"listen"`
+	} `json:"admin"`
 }
 
 type inspected struct {
@@ -73,7 +77,10 @@ type nodePlan struct {
 
 func (a *app) appCmd(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: nebctl app state|inspect|check|request|node")
+		return errors.New("usage: nebctl app state|inspect|check|request|node, or a console command (see console.go)")
+	}
+	if ok, err := a.consoleCmd(args[0], args[1:]); ok {
+		return err
 	}
 	fs := flag.NewFlagSet("app "+args[0], flag.ContinueOnError)
 	in := fs.String("in", "", "read the plan (check, node) or bundle (inspect) from this file; - for stdin")
@@ -180,6 +187,9 @@ func (a *app) appState() appState {
 	}
 	if h, ok, _ := a.loadHost(); ok {
 		s.Host = h
+		if h.Admin != nil {
+			s.Admin.Enabled, s.Admin.Listen = true, h.Admin.Listen
+		}
 	}
 	if c := a.currentCert(); c != nil {
 		s.Cert = infoOf(*c)

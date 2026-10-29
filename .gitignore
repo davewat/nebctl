@@ -1,3 +1,4 @@
 /nebctl
 /dist/
 /macos/.build/
+web/node_modules/

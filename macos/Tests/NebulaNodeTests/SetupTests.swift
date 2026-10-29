@@ -131,6 +131,30 @@ struct SetupTests {
         #expect(s.state?.pendingRequest == true)
     }
 
+    @Test func consoleStartsAndStops() async throws {
+        let url = try await Nebctl.startConsole()
+        #expect(url.host == "127.0.0.1")
+        #expect(url.query?.contains("embedded=1") == true)
+
+        // The link signs in once and lands on the console page.
+        let cfg = URLSessionConfiguration.ephemeral
+        let jar = try #require(cfg.httpCookieStorage)
+        let session = URLSession(configuration: cfg)
+        let (data, resp) = try await session.data(from: url)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(decoding: data, as: UTF8.self).contains("<html"))
+        let cookies = jar.cookies(for: url) ?? []
+        #expect(cookies.contains { $0.name == "nebctl_session" })
+
+        Nebctl.stopConsole(at: url, cookies: cookies)
+        var stopped = false
+        for _ in 0..<20 {
+            try await Task.sleep(nanoseconds: 250_000_000)
+            if (try? await URLSession(configuration: .ephemeral).data(from: url)) == nil { stopped = true; break }
+        }
+        #expect(stopped)
+    }
+
     /// A bundle as `nebctl ca sign` prints it: gzipped JSON, base64, armoured.
     private func bundle(domain: String, lighthouse: [String: Any]) throws -> String {
         func read(_ f: String) throws -> String { try String(contentsOf: certs.appendingPathComponent(f), encoding: .utf8) }

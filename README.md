@@ -213,6 +213,12 @@ The window also shows the setup, cert expiry and service, with Start, Stop
 and Restart. Signing this Mac's cert with a CA held on this Mac stays in
 Terminal (`sudo nebctl node`).
 
+**Open Admin Console** starts the admin console (below) after one password
+prompt and shows it in a second window. Its **Open in browser** button
+moves it to your browser. The console stops when you close its window or
+quit the app. The app carries Linux builds of its nebctl, so the console
+can install a matching nebctl on a lighthouse it connects to.
+
 ### Keeping a node's key on the node
 
 Instead of steps 2 to 4 above, so the private key never leaves the node:
@@ -240,6 +246,57 @@ Instead of steps 2 to 4 above, so the private key never leaves the node:
 | Stop or start nebula | `sudo nebctl service stop` / `start` |
 | Review this machine's security | `sudo nebctl audit` |
 | Turn on, change or turn off Nebula DNS | `sudo nebctl dns` |
+| See who's connected, sign or revoke certs, change the firewall or logging, forward logs to a SIEM | `sudo nebctl web` (see below) |
+
+### Admin console (`nebctl web`)
+
+```bash
+sudo nebctl web
+```
+
+This opens the admin console in your browser. It is a web page served by
+nebctl on `127.0.0.1` only, behind a link that works once. Press Ctrl+C to
+stop it. It manages this machine, and any machine you connect it to over
+SSH, usually the lighthouse:
+
+| Page | What it does |
+|---|---|
+| Map | The network as this machine sees it: the lighthouse, each host, direct and relayed tunnels, hosts still handshaking. Click a host for its cert, addresses and relays, and to close or re-open its tunnel, try another address, or ask the lighthouse where it is. |
+| Hosts | The same as a table, plus the lighthouse's address map (where it last saw each host). |
+| Certificates | On the machine holding the CA: sign a cert for a new host (the bundle appears once, with its key), sign a request, renew one, or revoke one and push the blocklist to other machines. |
+| Config | Nebula's firewall rules, the lighthouse's DNS, relay and port, a node's lighthouses, log level and format, and Prometheus metrics. Changes must pass `nebula -test`; most apply with a reload, and the port needs a restart. |
+| Logs | Nebula's log, live, and forwarding it to a SIEM. |
+| Health | Versions (with an update when nebula has a newer release), the service, cert and CA expiry, tunnel counts, metrics, and the security audit. |
+
+**Admin access.** The console reads connections from nebula's own SSH admin
+server (`list-hostmap` and the rest). nebctl turns it on for new setups, on
+`127.0.0.1:2242`, for a key only nebctl holds (`/etc/nebula/admin/`). A host
+set up before v0.5.0 shows a **Turn on admin access** button; it restarts
+nebula once.
+
+**Managing the lighthouse from another machine.** Choose **Connect to another
+machine** at the top and give the lighthouse's address and your SSH login
+(password, key file, or ssh-agent with `sudo --preserve-env=SSH_AUTH_SOCK nebctl web`).
+The first time, check the host key's fingerprint before trusting it (on the
+lighthouse: `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`). The console
+runs `sudo nebctl app ...` there, so the CA key never leaves the lighthouse.
+If nebctl is missing or older there, it offers to install a matching one.
+Trusted host keys are kept in `/etc/nebula/admin/known_hosts`.
+
+**Revoking a cert.** Nebula has no central revocation: each host refuses a
+cert only when the cert's fingerprint is on its own blocklist. After revoking,
+the console offers to push the list to every machine it is connected to.
+Each one reloads nebula, which drops the revoked host's tunnel within a few
+seconds. Connect to the hosts that matter before revoking, or push again
+later.
+
+**Sending logs to a SIEM (Linux).** Nebula writes its log to the journal.
+On the Logs page, give the SIEM's syslog address and protocol (UDP, TCP, or
+TLS with the CA that signed the SIEM's certificate). nebctl switches nebula
+to JSON logs and writes an rsyslog rule that forwards nebula's lines in
+RFC 5424 format. **Send test event** sends one line to search for. TLS needs
+`sudo apt install rsyslog-gnutls`. macOS has no rsyslog: point your SIEM's
+agent at `/var/log/nebula.log` instead.
 
 ### Names over Nebula (DNS)
 
@@ -322,6 +379,8 @@ sudo ufw delete allow OpenSSH
 | `/etc/systemd/system/nebula.service` | the Linux service; with DNS on, it also routes the domain to the lighthouses each time nebula starts |
 | `/etc/resolver/<domain>` | on macOS with DNS on: sends lookups for the Nebula domain to the lighthouses |
 | `/Library/LaunchDaemons/net.nebctl.nebula.plist` | the macOS service; logs go to `/var/log/nebula.log` |
+| `/etc/nebula/admin/` (0700) | the admin server's host key, nebctl's key for it, and `known_hosts` for machines the console connects to |
+| `/etc/rsyslog.d/60-nebctl-siem.conf` | with SIEM forwarding on (Linux): sends nebula's log lines to the SIEM |
 
 Back up `/etc/nebula/ca/ca.key` somewhere offline. Host certs expire when the
 CA does; `nebctl status` warns 30 days ahead, and signing the same name
@@ -331,7 +390,8 @@ again renews the cert at the same address.
 
 ```
 lighthouse | node | request | config | status | dns | audit [-json] [-offline]
-app state | inspect | check | request | node     (no questions, JSON: what the Mac app runs)
+web [-port N] [-no-open]                          the admin console, on 127.0.0.1
+app <command>      no questions, JSON out: what the console and the Mac app run
 install [-version vX.Y.Z] [-force]     update [-version vX.Y.Z] [-force]
 service start|stop|restart|status|uninstall
 ca init | import | sign | sign-request | bundle | lighthouse | list
@@ -346,6 +406,7 @@ source, and `-no-service` writes the config without starting nebula.
 ```bash
 make release   # dist/nebctl-{darwin,linux}-{arm64,amd64}, linux-arm, SHA256SUMS
 make test   # NEBULA_CERT=/path/to/nebula-cert also runs the key-matching tests
+make web       # rebuild the console (web/, React) into internal/web/dist (Node needed)
 make mac       # dist/Nebula Node.app and dist/NebulaNode-macos.zip (Xcode needed)
 make mac-test  # walks the app's setup against a real nebctl in a scratch root
 ```

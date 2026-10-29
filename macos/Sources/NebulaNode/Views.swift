@@ -119,6 +119,7 @@ struct Row: View {
 
 struct StatusPage: View {
     let setup: Setup
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         PageTitle(title: "Nebula on this Mac",
@@ -154,6 +155,18 @@ struct StatusPage: View {
                     Button("Stop") { Task { await setup.service("stop") } }
                     Button("Restart") { Task { await setup.service("restart") } }
                     Button("Refresh") { Task { await setup.refresh() } }
+                }
+            }
+            if s.host != nil {
+                Divider().padding(.vertical, 4)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Admin console").font(.headline)
+                    Text("See who's connected, sign and revoke certs, change the firewall and logging, and manage the lighthouse over SSH.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Admin Console") {
+                        Task { await setup.openConsole { openWindow(id: "console") } }
+                    }
                 }
             }
             if Nebctl.testRoot != nil {

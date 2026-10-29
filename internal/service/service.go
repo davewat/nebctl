@@ -14,7 +14,7 @@ const (
 	systemdUnit  = "/etc/systemd/system/nebula.service"
 	launchdLabel = "net.nebctl.nebula"
 	launchdPlist = "/Library/LaunchDaemons/" + launchdLabel + ".plist"
-	macLog       = "/var/log/nebula.log"
+	MacLog       = "/var/log/nebula.log"
 )
 
 // DNS sends lookups for Domain to Servers over the tun device Dev. On Linux
@@ -72,6 +72,15 @@ func Restart(goos string) error {
 	return run("systemctl", "restart", "nebula")
 }
 
+// Reload makes nebula re-read its config (SIGHUP): firewall, blocklist,
+// logging and stats change without dropping tunnels.
+func Reload(goos string) error {
+	if goos == "darwin" {
+		return run("launchctl", "kill", "SIGHUP", "system/"+launchdLabel)
+	}
+	return run("systemctl", "reload", "nebula")
+}
+
 func Start(goos string) error {
 	if goos == "darwin" {
 		if err := exec.Command("launchctl", "print", "system/"+launchdLabel).Run(); err == nil {
@@ -114,7 +123,7 @@ func Status(goos string) string {
 		}
 		for _, l := range strings.Split(string(out), "\n") {
 			if s, ok := strings.CutPrefix(strings.TrimSpace(l), "state = "); ok {
-				return s + " (logs: " + macLog + ")"
+				return s + " (logs: " + MacLog + ")"
 			}
 		}
 		return "loaded"
@@ -186,9 +195,9 @@ func plist(bin, cfg string) string {
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>` + macLog + `</string>
+	<string>` + MacLog + `</string>
 	<key>StandardErrorPath</key>
-	<string>` + macLog + `</string>
+	<string>` + MacLog + `</string>
 </dict>
 </plist>
 `

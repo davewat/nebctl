@@ -20,6 +20,12 @@ for arch in arm64 amd64; do
 		go build -ldflags "-s -w -X main.version=$version" -o "$work/nebctl-$arch" .)
 done
 lipo -create -output "$work/nebctl" "$work/nebctl-arm64" "$work/nebctl-amd64"
+# Linux builds of the same nebctl, so the admin console can install it on a
+# lighthouse it connects to over SSH.
+for arch in amd64 arm64 arm; do
+	(cd "$repo" && CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+		go build -ldflags "-s -w -X main.version=$version" -o "$work/nebctl-linux-$arch" .)
+done
 
 (cd "$here" && swift build -c release --arch arm64 --arch x86_64)
 bin=$(cd "$here" && swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
@@ -28,6 +34,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/NebulaNode" "$app/Contents/MacOS/NebulaNode"
 cp "$work/nebctl" "$app/Contents/Resources/nebctl"
+cp "$work"/nebctl-linux-* "$app/Contents/Resources/"
 short=${version#v}
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,6 +51,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key><true/>
+	<key>NSAppTransportSecurity</key>
+	<dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
 </plist>
 EOF

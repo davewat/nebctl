@@ -48,7 +48,11 @@ enum Nebctl {
     /// doesn't ask again for a few minutes.
     static func runAsAdmin(_ args: [String], why: String) async throws -> String {
         if testRoot != nil { return try await run(args) }
-        let cmd = ([binary] + args).map(shellQuote).joined(separator: " ")
+        return try await shellAsAdmin(([binary] + args).map(shellQuote).joined(separator: " "), why: why)
+    }
+
+    /// Runs a shell command line as root, through the password prompt.
+    private static func shellAsAdmin(_ cmd: String, why: String) async throws -> String {
         let source = "do shell script \"\(escape(cmd))\" with prompt \"\(escape(why))\" with administrator privileges without altering line endings"
         return try await withCheckedThrowingContinuation { cont in
             adminQueue.async {
@@ -113,6 +117,49 @@ enum Nebctl {
         try await withPlanFile(plan) { path in
             try await runAsAdmin(["app", "node", "-in", path], why: "Nebula Node wants to set up nebula on this Mac.")
         }
+    }
+
+    /// Starts `nebctl web` as root in the background, stopping when this app
+    /// quits, and returns its one-time link for the console window.
+    static func startConsole() async throws -> URL {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("nebctl-console-\(UUID().uuidString).url")
+        let args = ["web", "-no-open", "-port", "0", "-url-file", file.path,
+                    "-url-owner", String(getuid()), "-parent-pid", String(getpid())]
+        if testRoot != nil {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: binary)
+            p.arguments = args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+        } else {
+            // Output to /dev/null so the prompt's shell returns while the console runs on.
+            let cmd = ([binary] + args).map(shellQuote).joined(separator: " ") + " >/dev/null 2>&1 &"
+            _ = try await shellAsAdmin(cmd, why: "Nebula Node wants to start the admin console. It runs nebctl as root and answers only on this Mac.")
+        }
+        for _ in 0..<60 {
+            if let text = try? String(contentsOf: file, encoding: .utf8),
+               let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines) + "&embedded=1") {
+                try? FileManager.default.removeItem(at: file)
+                return url
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw NebctlError(message: "The admin console didn't start within 15 seconds.")
+    }
+
+    /// Asks a running console to stop, with the session the window signed in with.
+    static func stopConsole(at url: URL, cookies: [HTTPCookie]) {
+        guard let session = cookies.first(where: { $0.name == "nebctl_session" }),
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        parts.path = "/api/quit"
+        parts.query = nil
+        guard let quit = parts.url else { return }
+        var req = URLRequest(url: quit)
+        req.httpMethod = "POST"
+        req.setValue("1", forHTTPHeaderField: "X-Nebctl")
+        req.setValue("nebctl_session=\(session.value)", forHTTPHeaderField: "Cookie")
+        URLSession.shared.dataTask(with: req).resume()
     }
 
     static func service(_ action: String) async throws -> String {

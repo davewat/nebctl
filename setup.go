@@ -73,6 +73,7 @@ func (a *app) setupLighthouse() error {
 	}
 
 	h.Role, h.Name, h.NebulaIP = netconf.RoleLighthouse, c.Name, c.Networks[0]
+	defaultAdmin(h)
 	me := netconf.Lighthouse{Name: c.Name, NebulaIP: self, Endpoints: []string{ep}, Relay: h.Relay, DNS: h.DNS}
 	for _, l := range got.lighthouses {
 		h.Lighthouses = netconf.AddLighthouse(h.Lighthouses, l)
@@ -204,6 +205,15 @@ func (a *app) becomeNode(h *netconf.Host, c *pki.Cert, domain string) {
 	}
 	h.Role, h.Name, h.NebulaIP, h.ListenPort, h.Relay, h.DNS = netconf.RoleNode, c.Name, c.Networks[0], 0, false, false
 	h.Domain = a.knownDomain(h, domain)
+	defaultAdmin(h)
+}
+
+// defaultAdmin turns on nebula's admin server (127.0.0.1 only) for a new
+// setup, so `nebctl web` can show connections.
+func defaultAdmin(h *netconf.Host) {
+	if h.Admin == nil {
+		h.Admin = &netconf.Admin{Listen: netconf.DefaultAdminListen}
+	}
 }
 
 // learned is what a cert's source says about the network.
@@ -575,29 +585,46 @@ func inbound(preset, extra string) ([]netconf.Rule, error) {
 
 // apply writes config.yml (after nebula accepts it) and starts nebula.
 func (a *app) apply(h *netconf.Host) error {
-	cfg := netconf.Render(*h, netconf.Files{
-		CACrt: a.caCrt(), HostCrt: a.hostCrt(), HostKey: a.hostKey(), State: a.stateFile(),
-	}, a.goos)
-	tmp := a.cfgFile() + ".new"
-	if err := writeFile(tmp, []byte(cfg), 0o600); err != nil {
-		return err
-	}
-	if out, err := exec.Command(a.nebulaBin(), "-test", "-config", tmp).CombinedOutput(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("nebula rejected the new config, so the old one is kept:\n%s", strings.TrimSpace(string(out)))
-	}
-	if err := os.Rename(tmp, a.cfgFile()); err != nil {
-		return err
-	}
-	if err := h.Save(a.stateFile()); err != nil {
-		return err
-	}
-	a.p.Printf("\nWrote %s (nebula -test passed).\n", a.cfgFile())
-	dns, err := a.setResolver(h)
+	dns, err := a.writeConfig(h)
 	if err != nil {
 		return err
 	}
 	return a.startService(dns)
+}
+
+// writeConfig writes config.yml once nebula accepts it, saves h, and sets
+// up name lookups and SIEM forwarding. It returns what the Linux service
+// needs for DNS.
+func (a *app) writeConfig(h *netconf.Host) (service.DNS, error) {
+	files := netconf.Files{CACrt: a.caCrt(), HostCrt: a.hostCrt(), HostKey: a.hostKey(), State: a.stateFile()}
+	if h.Admin != nil {
+		pub, err := a.adminKeys().Ensure()
+		if err != nil {
+			return service.DNS{}, fmt.Errorf("making nebula's admin keys: %w", err)
+		}
+		files.AdminHostKey, files.AdminUserKey = a.adminKeys().HostKey(), pub
+	}
+	cfg := netconf.Render(*h, files, a.goos)
+	tmp := a.cfgFile() + ".new"
+	if err := writeFile(tmp, []byte(cfg), 0o600); err != nil {
+		return service.DNS{}, err
+	}
+	if out, err := exec.Command(a.nebulaBin(), "-test", "-config", tmp).CombinedOutput(); err != nil {
+		os.Remove(tmp)
+		return service.DNS{}, fmt.Errorf("nebula rejected the new config, so the old one is kept:\n%s", strings.TrimSpace(string(out)))
+	}
+	if err := os.Rename(tmp, a.cfgFile()); err != nil {
+		return service.DNS{}, err
+	}
+	if err := h.Save(a.stateFile()); err != nil {
+		return service.DNS{}, err
+	}
+	a.p.Printf("\nWrote %s (nebula -test passed).\n", a.cfgFile())
+	dns, err := a.setResolver(h)
+	if err != nil {
+		return service.DNS{}, err
+	}
+	return dns, a.writeSIEM(h)
 }
 
 func (a *app) startService(dns service.DNS) error {

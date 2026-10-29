@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 TARGETS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 linux/arm
 
-.PHONY: build dist release test mac mac-test clean
+.PHONY: build dist release test web mac mac-test clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o nebctl .
@@ -15,6 +15,11 @@ dist:
 		echo "dist/nebctl-$$os-$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags '$(LDFLAGS)' -o dist/nebctl-$$os-$$arch . || exit 1; \
 	done
+
+# The admin console (React). Its build is committed in internal/web/dist,
+# so plain `go build` needs no Node; run this after changing web/.
+web:
+	cd web && npm ci && npm run build
 
 # The Mac app, with a universal nebctl inside.
 mac:

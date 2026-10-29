@@ -11,6 +11,11 @@ struct NebulaNodeApp: App {
             ContentView(setup: setup)
         }
         .windowResizability(.contentMinSize)
+
+        Window("Nebula Admin Console", id: "console") {
+            ConsoleView(setup: setup)
+        }
+        .defaultSize(width: 1240, height: 820)
     }
 }
 

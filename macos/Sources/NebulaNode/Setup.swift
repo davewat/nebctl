@@ -62,11 +62,24 @@ final class Setup {
 
     var log = ""
 
+    /// The admin console's link while its window is open.
+    var consoleURL: URL?
+
     // MARK: Status
 
     func refresh() async {
         await run("Reading this Mac's setup…") {
             self.state = try await Nebctl.state()
+        }
+    }
+
+    /// Starts the admin console (or reuses the running one) and then opens
+    /// its window.
+    func openConsole(_ show: @escaping () -> Void) async {
+        if consoleURL != nil { show(); return }
+        await run("Starting the admin console…") {
+            self.consoleURL = try await Nebctl.startConsole()
+            show()
         }
     }
 

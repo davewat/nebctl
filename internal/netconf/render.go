@@ -11,7 +11,13 @@ import (
 type Files struct {
 	CACrt, HostCrt, HostKey string
 	State                   string // nebctl.json, named in the header
+	// The admin server's host key file, and the public key (authorized_keys
+	// form) allowed to log in to it as user "nebctl".
+	AdminHostKey, AdminUserKey string
 }
+
+// AdminUser is the name nebctl logs in to nebula's admin server as.
+const AdminUser = "nebctl"
 
 // Render writes nebula's config.yml for h. On macOS the tun device is left
 // for nebula to pick (it must be a utun device).
@@ -38,6 +44,12 @@ func Render(h Host, f Files, goos string) string {
 	w("  ca: %s", q(f.CACrt))
 	w("  cert: %s", q(f.HostCrt))
 	w("  key: %s", q(f.HostKey))
+	if len(h.Blocklist) > 0 {
+		w("  blocklist:")
+		for _, fp := range h.Blocklist {
+			w("    - %s", q(fp))
+		}
+	}
 	w("")
 	if len(others) == 0 {
 		w("static_host_map: {}")
@@ -106,9 +118,29 @@ func Render(h Host, f Files, goos string) string {
 	}
 	w("")
 	w("logging:")
-	w("  level: info")
-	w("  format: text")
+	w("  level: %s", h.LogLevel())
+	w("  format: %s", h.LogFormat())
 	w("")
+	if h.Admin != nil && f.AdminHostKey != "" && f.AdminUserKey != "" {
+		w("sshd:")
+		w("  enabled: true")
+		w("  listen: %s", q(h.Admin.Listen))
+		w("  host_key: %s", q(f.AdminHostKey))
+		w("  authorized_users:")
+		w("    - user: %s", AdminUser)
+		w("      keys:")
+		w("        - %s", q(strings.TrimSpace(f.AdminUserKey)))
+		w("")
+	}
+	if h.Metrics != nil {
+		w("stats:")
+		w("  type: prometheus")
+		w("  listen: %s", q(h.Metrics.Listen))
+		w("  path: /metrics")
+		w("  namespace: nebula")
+		w("  interval: 10s")
+		w("")
+	}
 	w("firewall:")
 	w("  outbound:")
 	w("    - port: any")

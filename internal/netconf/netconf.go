@@ -75,6 +75,61 @@ type Host struct {
 	// machine looks up names under it through the lighthouses' DNS.
 	Domain  string `json:"domain,omitempty"`
 	Resolve bool   `json:"resolve,omitempty"`
+
+	// Admin turns on nebula's SSH admin server (list-hostmap and the
+	// rest), on 127.0.0.1 only, for nebctl's own key.
+	Admin *Admin `json:"admin,omitempty"`
+	// Logging is nebula's log level and format; nil is info and text.
+	Logging *Logging `json:"logging,omitempty"`
+	// Metrics turns on nebula's Prometheus endpoint on 127.0.0.1.
+	Metrics *Metrics `json:"metrics,omitempty"`
+	// Blocklist holds the fingerprints of revoked certs.
+	Blocklist []string `json:"blocklist,omitempty"`
+	// SIEM forwards nebula's log lines to a syslog collector (Linux).
+	SIEM *SIEM `json:"siem,omitempty"`
+}
+
+type Admin struct {
+	Listen string `json:"listen"` // 127.0.0.1:port
+}
+
+type Logging struct {
+	Level  string `json:"level"`  // trace, debug, info, warn, error
+	Format string `json:"format"` // text or json
+}
+
+type Metrics struct {
+	Listen string `json:"listen"` // 127.0.0.1:port; served at /metrics
+}
+
+type SIEM struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"` // udp, tcp or tls
+	CAFile   string `json:"ca_file,omitempty"`
+}
+
+// Defaults for the admin server and metrics: loopback only.
+const (
+	DefaultAdminListen   = "127.0.0.1:2242"
+	DefaultMetricsListen = "127.0.0.1:9417"
+)
+
+// LogLevels are nebula's, quietest last.
+var LogLevels = []string{"trace", "debug", "info", "warn", "error"}
+
+func (h Host) LogLevel() string {
+	if h.Logging == nil || h.Logging.Level == "" {
+		return "info"
+	}
+	return h.Logging.Level
+}
+
+func (h Host) LogFormat() string {
+	if h.Logging == nil || h.Logging.Format == "" {
+		return "text"
+	}
+	return h.Logging.Format
 }
 
 const (
