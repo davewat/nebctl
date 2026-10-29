@@ -143,11 +143,7 @@ func (a *app) setupNode() error {
 	if c == nil || len(c.Networks) == 0 {
 		return errors.New("no usable cert installed")
 	}
-	if h.Role == netconf.RoleLighthouse {
-		h.Lighthouses = nil // it was one of them; start from what we learn now
-	}
-	h.Role, h.Name, h.NebulaIP, h.ListenPort, h.Relay, h.DNS = netconf.RoleNode, c.Name, c.Networks[0], 0, false, false
-	h.Domain = a.knownDomain(h, got.domain)
+	a.becomeNode(h, c, got.domain)
 
 	if len(learned) == 0 && a.haveCA() {
 		if network, err := a.loadNetwork(); err == nil {
@@ -199,6 +195,15 @@ func (a *app) setupNode() error {
 	a.p.Printf("\nTry it: ping %s\n", h.Lighthouses[0].NebulaIP)
 	a.resolveHint(h)
 	return nil
+}
+
+// becomeNode makes h a node holding cert c.
+func (a *app) becomeNode(h *netconf.Host, c *pki.Cert, domain string) {
+	if h.Role == netconf.RoleLighthouse {
+		h.Lighthouses = nil // it was one of them; start from what we learn now
+	}
+	h.Role, h.Name, h.NebulaIP, h.ListenPort, h.Relay, h.DNS = netconf.RoleNode, c.Name, c.Networks[0], 0, false, false
+	h.Domain = a.knownDomain(h, domain)
 }
 
 // learned is what a cert's source says about the network.
@@ -388,28 +393,13 @@ func (a *app) makeRequest() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(a.cfgDir(), 0o755); err != nil {
-		return err
-	}
 	reuse := false
-	if exists(a.pendingKey()) && exists(a.pendingPub()) {
+	if a.pendingRequest() {
 		if reuse, err = a.p.Confirm("A key from an earlier request is waiting here. Reuse it?", true); err != nil {
 			return err
 		}
 	}
-	if !reuse {
-		os.Remove(a.pendingKey())
-		os.Remove(a.pendingPub())
-		if err := a.tool().Keygen(a.pendingKey(), a.pendingPub()); err != nil {
-			return err
-		}
-		os.Chmod(a.pendingKey(), 0o600)
-	}
-	pub, err := os.ReadFile(a.pendingPub())
-	if err != nil {
-		return err
-	}
-	text, err := bundle.EncodeRequest(bundle.Request{Name: name, PublicKey: string(pub), NebulaIP: ip})
+	text, err := a.writeRequest(name, ip, reuse)
 	if err != nil {
 		return err
 	}
@@ -419,6 +409,31 @@ func (a *app) makeRequest() error {
 	a.p.Print(text)
 	a.p.Printf("\nThe private key stays in %s.\n", a.pendingKey())
 	return nil
+}
+
+func (a *app) pendingRequest() bool { return exists(a.pendingKey()) && exists(a.pendingPub()) }
+
+// writeRequest makes a key pair in pending.key (unless reuse keeps the one
+// waiting) and returns the request carrying its public half.
+func (a *app) writeRequest(name, ip string, reuse bool) (string, error) {
+	if err := os.MkdirAll(a.cfgDir(), 0o755); err != nil {
+		return "", err
+	}
+	if !reuse || !a.pendingRequest() {
+		os.Remove(a.pendingKey())
+		os.Remove(a.pendingPub())
+		t := a.tool()
+		t.Stdout = os.Stderr // keep stdout for the request
+		if err := t.Keygen(a.pendingKey(), a.pendingPub()); err != nil {
+			return "", err
+		}
+		os.Chmod(a.pendingKey(), 0o600)
+	}
+	pub, err := os.ReadFile(a.pendingPub())
+	if err != nil {
+		return "", err
+	}
+	return bundle.EncodeRequest(bundle.Request{Name: name, PublicKey: string(pub), NebulaIP: ip})
 }
 
 func (a *app) certFromFiles() (learned, error) {
@@ -448,37 +463,49 @@ func (a *app) certFromFiles() (learned, error) {
 	return learned{}, err
 }
 
-// installCert checks the three files belong together, then writes them.
-func (a *app) installCert(caData, crtData, keyData []byte) (pki.Cert, error) {
+// checkCert checks the host cert was signed by the CA, is in date and, when
+// keyData is given, belongs to that key. It returns the CA and host certs.
+func (a *app) checkCert(caData, crtData, keyData []byte) (ca, c pki.Cert, err error) {
 	cas, err := a.tool().InspectPEM(caData)
 	if err != nil {
-		return pki.Cert{}, fmt.Errorf("the CA cert: %w", err)
+		return ca, c, fmt.Errorf("the CA cert: %w", err)
 	}
 	certs, err := a.tool().InspectPEM(crtData)
 	if err != nil {
-		return pki.Cert{}, fmt.Errorf("the host cert: %w", err)
+		return ca, c, fmt.Errorf("the host cert: %w", err)
 	}
-	c := certs[0]
+	c = certs[0]
 	if c.IsCA {
-		return pki.Cert{}, errors.New("that is a CA cert, not a host cert")
+		return ca, c, errors.New("that is a CA cert, not a host cert")
 	}
 	signed := false
-	for _, ca := range cas {
-		if ca.IsCA && ca.Fingerprint == c.Issuer {
-			signed = true
+	for _, k := range cas {
+		if k.IsCA && k.Fingerprint == c.Issuer {
+			ca, signed = k, true
 		}
 	}
 	if !signed {
-		return pki.Cert{}, errors.New("the host cert was not signed by that CA")
+		return ca, c, errors.New("the host cert was not signed by that CA")
 	}
-	if !pki.IsPrivateKey(keyData) {
-		return pki.Cert{}, errors.New("the key is not a private key")
-	}
-	if ok, err := pki.KeyMatches(keyData, c); err != nil || !ok {
-		return pki.Cert{}, errors.New("the private key does not belong to the host cert")
+	if keyData != nil {
+		if !pki.IsPrivateKey(keyData) {
+			return ca, c, errors.New("the key is not a private key")
+		}
+		if ok, err := pki.KeyMatches(keyData, c); err != nil || !ok {
+			return ca, c, errors.New("the private key does not belong to the host cert")
+		}
 	}
 	if d := daysLeft(c.NotAfter); d < 0 {
-		return pki.Cert{}, fmt.Errorf("the host cert expired on %s", c.NotAfter.Format("2006-01-02"))
+		return ca, c, fmt.Errorf("the host cert expired on %s", c.NotAfter.Format("2006-01-02"))
+	}
+	return ca, c, nil
+}
+
+// installCert checks the three files belong together, then writes them.
+func (a *app) installCert(caData, crtData, keyData []byte) (pki.Cert, error) {
+	_, c, err := a.checkCert(caData, crtData, keyData)
+	if err != nil {
+		return pki.Cert{}, err
 	}
 	if err := writeFile(a.caCrt(), caData, 0o644); err != nil {
 		return pki.Cert{}, err
@@ -512,13 +539,9 @@ func (a *app) askFirewall(h *netconf.Host) error {
 	if err != nil {
 		return err
 	}
-	switch i {
-	case 0:
-		h.Inbound = []netconf.Rule{netconf.PingRule, netconf.SSHRule}
-	case 1:
-		h.Inbound = []netconf.Rule{netconf.PingRule}
-	default:
-		h.Inbound = []netconf.Rule{netconf.AllRule}
+	preset := firewallPresets[i]
+	if preset == "all" {
+		h.Inbound, _ = inbound(preset, "")
 		return nil
 	}
 	extra, err := a.p.AskValid("Other ports to open, e.g. tcp/443, udp/53, tcp/8000-8100 (blank for none)", "",
@@ -526,9 +549,28 @@ func (a *app) askFirewall(h *netconf.Host) error {
 	if err != nil {
 		return err
 	}
-	rules, _ := netconf.ParseRules(extra)
-	h.Inbound = append(h.Inbound, rules...)
-	return nil
+	h.Inbound, err = inbound(preset, extra)
+	return err
+}
+
+// firewallPresets are askFirewall's choices, in order.
+var firewallPresets = []string{"ping-ssh", "ping", "all"}
+
+// inbound is a preset's rules plus extra ports ("tcp/443, udp/53").
+func inbound(preset, extra string) ([]netconf.Rule, error) {
+	var rules []netconf.Rule
+	switch preset {
+	case "ping-ssh":
+		rules = []netconf.Rule{netconf.PingRule, netconf.SSHRule}
+	case "ping":
+		rules = []netconf.Rule{netconf.PingRule}
+	case "all":
+		return []netconf.Rule{netconf.AllRule}, nil
+	default:
+		return nil, fmt.Errorf("unknown firewall choice %q", preset)
+	}
+	more, err := netconf.ParseRules(extra)
+	return append(rules, more...), err
 }
 
 // apply writes config.yml (after nebula accepts it) and starts nebula.

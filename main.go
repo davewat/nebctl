@@ -36,6 +36,7 @@ Set up this machine:
                              answer, and whether this machine looks names up there
   status                     show what is set up here
   audit [-json] [-offline]   review this machine's security; exits 1 on any FAIL
+  app state|inspect|check|request|node   what the Mac app runs: no questions, JSON out
 
 Nebula itself:
   install [-version vX.Y.Z] [-force]   install nebula and nebula-cert
@@ -129,6 +130,8 @@ func (a *app) run(args []string) error {
 		return a.auditCmd(rest)
 	case "dns":
 		return a.dnsCmd()
+	case "app":
+		return a.appCmd(rest)
 	case "install", "update":
 		fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 		tag := fs.String("version", "", "release tag, e.g. v1.11.2 (default: latest)")

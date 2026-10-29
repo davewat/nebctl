@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 TARGETS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 linux/arm
 
-.PHONY: build dist release test clean
+.PHONY: build dist release test mac mac-test clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o nebctl .
@@ -16,9 +16,17 @@ dist:
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags '$(LDFLAGS)' -o dist/nebctl-$$os-$$arch . || exit 1; \
 	done
 
-# dist plus SHA256SUMS, ready to attach to a GitHub release.
-release: clean dist
-	cd dist && shasum -a 256 nebctl-* > SHA256SUMS
+# The Mac app, with a universal nebctl inside.
+mac:
+	macos/build.sh $(VERSION) dist
+
+# Needs Go, and nebula and nebula-cert in /usr/local/bin.
+mac-test:
+	cd macos && swift test
+
+# dist and the Mac app plus SHA256SUMS, ready to attach to a GitHub release.
+release: clean dist mac
+	cd dist && shasum -a 256 nebctl-* NebulaNode-macos.zip > SHA256SUMS
 
 # Set NEBULA_CERT to a nebula-cert binary to run the key-matching tests too.
 test:

@@ -34,7 +34,7 @@ Needs a public IP (or DNS name) and UDP 4242 reachable from the internet.
 
 1. Download and install nebctl:
    ```bash
-   gh release download -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
+   gh release download -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS --clobber
    sha256sum -c --ignore-missing SHA256SUMS
    sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
    ```
@@ -111,7 +111,7 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
 
 1. Download and install nebctl:
    ```bash
-   gh release download -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS
+   gh release download -R davewat/nebctl -p nebctl-linux-amd64 -p SHA256SUMS --clobber
    sha256sum -c --ignore-missing SHA256SUMS
    sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
    ```
@@ -145,7 +145,7 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
 
 1. Download and install nebctl (`nebctl-darwin-amd64` on an Intel Mac):
    ```bash
-   gh release download -R davewat/nebctl -p nebctl-darwin-arm64 -p SHA256SUMS
+   gh release download -R davewat/nebctl -p nebctl-darwin-arm64 -p SHA256SUMS --clobber
    shasum -a 256 -c --ignore-missing SHA256SUMS
    sudo mkdir -p /usr/local/bin
    sudo install -m 0755 nebctl-darwin-arm64 /usr/local/bin/nebctl
@@ -182,6 +182,37 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
    tail -f /var/log/nebula.log
    ```
 
+### macOS app (Nebula Node)
+
+A Mac app that runs the same node setup as `sudo nebctl node`, in a window.
+It carries its own nebctl, so it needs no Terminal steps. It asks the same
+questions (install nebula, certificate, lighthouses, firewall, DNS) and
+changes the Mac through the standard administrator password prompt.
+
+1. Download it, check it and put it in Applications:
+   ```bash
+   gh release download -R davewat/nebctl -p NebulaNode-macos.zip -p SHA256SUMS --clobber
+   ```
+   ```bash
+   shasum -a 256 -c --ignore-missing SHA256SUMS
+   ```
+   ```bash
+   ditto -x -k NebulaNode-macos.zip /Applications
+   ```
+2. It is signed ad hoc, not notarized, so clear the download flag once (else
+   macOS says it can't check the app):
+   ```bash
+   xattr -cr "/Applications/Nebula Node.app"
+   ```
+3. On the lighthouse, sign a cert for this Mac (`sudo nebctl ca sign`), or
+   choose "Keep the private key here" in the app for a request instead.
+4. Open Nebula Node, click **Set Up This Mac as a Node**, and follow it.
+   Each step matches the table in section 3.
+
+The window also shows the setup, cert expiry and service, with Start, Stop
+and Restart. Signing this Mac's cert with a CA held on this Mac stays in
+Terminal (`sudo nebctl node`).
+
 ### Keeping a node's key on the node
 
 Instead of steps 2 to 4 above, so the private key never leaves the node:
@@ -201,6 +232,7 @@ Instead of steps 2 to 4 above, so the private key never leaves the node:
 
 | Task | Command |
 |---|---|
+| Update nebctl itself | repeat step 1 (`--clobber` replaces the file downloaded last time), then `nebctl -version` |
 | Update nebula on any host (restarts it) | `sudo nebctl update` |
 | Change a host's firewall or lighthouses | `sudo nebctl node` (or `lighthouse`), keep the cert, answer again |
 | Renew a host's cert | on the lighthouse `sudo nebctl ca sign` with the same name; on the host `sudo nebctl node`, answer `n` to "Keep it?", paste the bundle |
@@ -299,6 +331,7 @@ again renews the cert at the same address.
 
 ```
 lighthouse | node | request | config | status | dns | audit [-json] [-offline]
+app state | inspect | check | request | node     (no questions, JSON: what the Mac app runs)
 install [-version vX.Y.Z] [-force]     update [-version vX.Y.Z] [-force]
 service start|stop|restart|status|uninstall
 ca init | import | sign | sign-request | bundle | lighthouse | list
@@ -313,4 +346,14 @@ source, and `-no-service` writes the config without starting nebula.
 ```bash
 make release   # dist/nebctl-{darwin,linux}-{arm64,amd64}, linux-arm, SHA256SUMS
 make test   # NEBULA_CERT=/path/to/nebula-cert also runs the key-matching tests
+make mac       # dist/Nebula Node.app and dist/NebulaNode-macos.zip (Xcode needed)
+make mac-test  # walks the app's setup against a real nebctl in a scratch root
+```
+
+The app's code is in `macos/` (SwiftUI, macOS 14+). To try it without
+changing the Mac, start it with nebctl working under a scratch directory:
+no password prompts, no service.
+
+```bash
+NEBCTL_ROOT=/tmp/nebroot "dist/Nebula Node.app/Contents/MacOS/NebulaNode"
 ```
