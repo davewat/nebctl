@@ -17,14 +17,25 @@ const (
 	macLog       = "/var/log/nebula.log"
 )
 
+// DNS sends lookups for Domain to Servers over the tun device Dev. On Linux
+// the unit sets it with resolvectl each time nebula starts, since the
+// device (and its settings) goes away when nebula stops. Resolvectl is its
+// path; empty leaves DNS alone.
+type DNS struct {
+	Resolvectl string
+	Dev        string
+	Servers    []string
+	Domain     string
+}
+
 // Install writes the unit or plist, enables it at boot and (re)starts it.
-func Install(goos, nebulaBin, configPath string) error {
+func Install(goos, nebulaBin, configPath string, dns DNS) error {
 	switch goos {
 	case "linux":
 		if _, err := exec.LookPath("systemctl"); err != nil {
 			return fmt.Errorf("no systemd here; start nebula yourself with: %s -config %s", nebulaBin, configPath)
 		}
-		if err := os.WriteFile(systemdUnit, []byte(unit(nebulaBin, configPath)), 0o644); err != nil {
+		if err := os.WriteFile(systemdUnit, []byte(unit(nebulaBin, configPath, dns)), 0o644); err != nil {
 			return err
 		}
 		if err := run("systemctl", "daemon-reload"); err != nil {
@@ -127,8 +138,16 @@ func removeIfExists(p string) error {
 	return nil
 }
 
-// unit follows nebula's examples/service_scripts/nebula.service.
-func unit(bin, cfg string) string {
+// unit follows nebula's examples/service_scripts/nebula.service. Type=notify
+// runs ExecStartPost once nebula reports ready, after its tun device is up.
+func unit(bin, cfg string, dns DNS) string {
+	post := ""
+	if dns.Resolvectl != "" && dns.Domain != "" && len(dns.Servers) > 0 {
+		r := dns.Resolvectl
+		post = "ExecStartPost=-" + r + " dns " + dns.Dev + " " + strings.Join(dns.Servers, " ") + "\n" +
+			"ExecStartPost=-" + r + " domain " + dns.Dev + " ~" + dns.Domain + "\n" +
+			"ExecStartPost=-" + r + " default-route " + dns.Dev + " false\n"
+	}
 	return `[Unit]
 Description=Nebula overlay network
 Wants=basic.target network-online.target nss-lookup.target time-sync.target
@@ -141,7 +160,7 @@ NotifyAccess=main
 SyslogIdentifier=nebula
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=` + bin + ` -config ` + cfg + `
-Restart=always
+` + post + `Restart=always
 
 [Install]
 WantedBy=multi-user.target

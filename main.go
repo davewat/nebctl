@@ -32,6 +32,8 @@ Set up this machine:
   node                       set up a node that joins a network
   request                    make a key here and a request for the CA host to sign
   config                     rewrite config.yml from nebctl.json and restart nebula
+  dns                        find Nebula hosts by name: the domain, which lighthouses
+                             answer, and whether this machine looks names up there
   status                     show what is set up here
   audit [-json] [-offline]   review this machine's security; exits 1 on any FAIL
 
@@ -125,6 +127,8 @@ func (a *app) run(args []string) error {
 		return a.status()
 	case "audit":
 		return a.auditCmd(rest)
+	case "dns":
+		return a.dnsCmd()
 	case "install", "update":
 		fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 		tag := fs.String("version", "", "release tag, e.g. v1.11.2 (default: latest)")
@@ -239,6 +243,7 @@ func (a *app) menu() error {
 			"Certificate authority: create, import, sign certs for other hosts",
 			"Install or update nebula",
 			"Status",
+			"DNS: find Nebula hosts by name",
 			"Security audit of this machine",
 			"Quit",
 		}, a.defaultChoice())
@@ -257,6 +262,8 @@ func (a *app) menu() error {
 		case 4:
 			err = a.status()
 		case 5:
+			err = a.dnsCmd()
+		case 6:
 			if err = a.audit(false, false); errors.Is(err, errAuditFailed) {
 				err = nil
 			}
@@ -310,6 +317,16 @@ func (a *app) status() error {
 		a.p.Printf("this host    %s %s, %s\n", h.Role, h.Name, h.NebulaIP)
 		if h.Role == netconf.RoleLighthouse {
 			a.p.Printf("listening    UDP %d, relay %t\n", h.ListenPort, h.Relay)
+			if h.DNS {
+				addr, _, _ := strings.Cut(h.NebulaIP, "/")
+				a.p.Printf("dns          answers on %s:53 (udp/53 open to Nebula hosts)\n", addr)
+			}
+		}
+		switch servers := netconf.DNSServers(*h); {
+		case h.Resolve && h.Domain != "" && len(servers) > 0:
+			a.p.Printf("names        *.%s through %s\n", h.Domain, strings.Join(servers, ", "))
+		case h.Domain != "":
+			a.p.Printf("names        *.%s not looked up here (`sudo nebctl dns`)\n", h.Domain)
 		}
 		for i, l := range h.Lighthouses {
 			label := ""

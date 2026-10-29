@@ -28,6 +28,7 @@ type app struct {
 	goos      string
 	noService bool
 	http      *http.Client
+	renamed   string // the old name a cert just signed for another host replaces
 }
 
 func (a *app) path(p string) string {

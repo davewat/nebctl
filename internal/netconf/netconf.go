@@ -20,12 +20,20 @@ type Lighthouse struct {
 	NebulaIP  string   `json:"nebula_ip"` // bare address, e.g. 10.221.221.1
 	Endpoints []string `json:"endpoints"` // host:port reachable from the internet
 	Relay     bool     `json:"relay,omitempty"`
+	DNS       bool     `json:"dns,omitempty"` // answers DNS for Nebula hosts on NebulaIP:53
 }
 
 func (l Lighthouse) String() string {
 	s := l.NebulaIP + " at " + strings.Join(l.Endpoints, ", ")
+	var roles []string
 	if l.Relay {
-		s += " (relay)"
+		roles = append(roles, "relay")
+	}
+	if l.DNS {
+		roles = append(roles, "DNS")
+	}
+	if len(roles) > 0 {
+		s += " (" + strings.Join(roles, ", ") + ")"
 	}
 	return s
 }
@@ -60,8 +68,13 @@ type Host struct {
 	NebulaIP    string       `json:"nebula_ip"` // CIDR, e.g. 10.221.221.1/22
 	ListenPort  int          `json:"listen_port"`
 	Relay       bool         `json:"relay,omitempty"` // lighthouse only: relay for nodes
+	DNS         bool         `json:"dns,omitempty"`   // lighthouse only: answer DNS on NebulaIP:53
 	Lighthouses []Lighthouse `json:"lighthouses"`
 	Inbound     []Rule       `json:"inbound"`
+	// Domain is the network's Nebula-only domain; with Resolve set, this
+	// machine looks up names under it through the lighthouses' DNS.
+	Domain  string `json:"domain,omitempty"`
+	Resolve bool   `json:"resolve,omitempty"`
 }
 
 const (
@@ -83,6 +96,7 @@ type Issued struct {
 // bundle carries, and the certs signed so far (so addresses are not reused).
 type Network struct {
 	CIDR        string       `json:"cidr"`
+	Domain      string       `json:"domain,omitempty"` // host names end in it; only Nebula uses it
 	Lighthouses []Lighthouse `json:"lighthouses"`
 	Issued      []Issued     `json:"issued"`
 }

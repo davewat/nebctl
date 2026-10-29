@@ -55,6 +55,12 @@ func Render(h Host, f Files, goos string) string {
 	w("lighthouse:")
 	if lighthouse {
 		w("  am_lighthouse: true")
+		if h.DNS && self != "" {
+			w("  serve_dns: true")
+			w("  dns:")
+			w("    host: %s", q(self))
+			w("    port: 53")
+		}
 	} else {
 		w("  am_lighthouse: false")
 		w("  interval: 60")
@@ -108,11 +114,15 @@ func Render(h Host, f Files, goos string) string {
 	w("    - port: any")
 	w("      proto: any")
 	w("      host: any")
-	if len(h.Inbound) == 0 {
+	inbound := h.Inbound
+	if lighthouse && h.DNS && !allows(inbound, DNSRule) {
+		inbound = append(inbound[:len(inbound):len(inbound)], DNSRule)
+	}
+	if len(inbound) == 0 {
 		w("  inbound: []")
 	} else {
 		w("  inbound:")
-		for _, r := range h.Inbound {
+		for _, r := range inbound {
 			w("    - port: %s", q(r.Port))
 			w("      proto: %s", r.Proto)
 			switch {
@@ -126,4 +136,15 @@ func Render(h Host, f Files, goos string) string {
 		}
 	}
 	return b.String()
+}
+
+// allows reports whether rules already let want's traffic in from any host.
+func allows(rules []Rule, want Rule) bool {
+	for _, r := range rules {
+		if (r.Proto == want.Proto || r.Proto == "any") && (r.Port == want.Port || r.Port == "any") &&
+			(r.Host == "any" || r.Host == "") && r.Group == "" {
+			return true
+		}
+	}
+	return false
 }

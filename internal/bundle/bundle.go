@@ -37,6 +37,7 @@ type Bundle struct {
 	HostCrt     string               `json:"host_crt"`
 	HostKey     string               `json:"host_key,omitempty"`
 	Lighthouses []netconf.Lighthouse `json:"lighthouses,omitempty"`
+	Domain      string               `json:"domain,omitempty"` // the network's Nebula-only DNS domain
 }
 
 type Request struct {

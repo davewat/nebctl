@@ -29,7 +29,7 @@ func (a *app) setupLighthouse() error {
 	}
 	a.p.Println("\nSetting up this machine as a lighthouse: the host with a fixed public")
 	a.p.Println("address that every other host checks in with to find the others.")
-	learned, err := a.obtainCert(netconf.RoleLighthouse)
+	got, err := a.obtainCert(netconf.RoleLighthouse)
 	if err != nil {
 		return err
 	}
@@ -63,10 +63,18 @@ func (a *app) setupLighthouse() error {
 	if h.Relay, err = a.p.Confirm("Relay traffic for hosts that can't reach each other directly (strict NAT)?", true); err != nil {
 		return err
 	}
+	h.Domain = a.knownDomain(h, got.domain)
+	q := fmt.Sprintf("Answer DNS for Nebula host names (on %s:53, reachable over Nebula only)?", self)
+	if h.Domain != "" {
+		q = fmt.Sprintf("Answer DNS for *.%s (on %s:53, reachable over Nebula only)?", h.Domain, self)
+	}
+	if h.DNS, err = a.p.Confirm(q, h.DNS || h.Domain != ""); err != nil {
+		return err
+	}
 
 	h.Role, h.Name, h.NebulaIP = netconf.RoleLighthouse, c.Name, c.Networks[0]
-	me := netconf.Lighthouse{Name: c.Name, NebulaIP: self, Endpoints: []string{ep}, Relay: h.Relay}
-	for _, l := range learned {
+	me := netconf.Lighthouse{Name: c.Name, NebulaIP: self, Endpoints: []string{ep}, Relay: h.Relay, DNS: h.DNS}
+	for _, l := range got.lighthouses {
 		h.Lighthouses = netconf.AddLighthouse(h.Lighthouses, l)
 	}
 	h.Lighthouses = netconf.AddLighthouse(h.Lighthouses, me)
@@ -84,6 +92,9 @@ func (a *app) setupLighthouse() error {
 	if err := a.askFirewall(h); err != nil {
 		return err
 	}
+	if err := a.askResolve(h); err != nil {
+		return err
+	}
 	if err := a.apply(h); err != nil {
 		return err
 	}
@@ -99,6 +110,9 @@ func (a *app) setupLighthouse() error {
 		if err != nil || !more {
 			if err == nil {
 				a.p.Println("Sign more any time with `sudo nebctl ca sign`.")
+				if n, err := a.loadNetwork(); err == nil {
+					a.renameHint(n)
+				}
 			}
 			return err
 		}
@@ -120,10 +134,11 @@ func (a *app) setupNode() error {
 		return err
 	}
 	a.p.Println("\nSetting up this machine as a node on a Nebula network.")
-	learned, err := a.obtainCert(netconf.RoleNode)
+	got, err := a.obtainCert(netconf.RoleNode)
 	if err != nil {
 		return err
 	}
+	learned := got.lighthouses
 	c := a.currentCert()
 	if c == nil || len(c.Networks) == 0 {
 		return errors.New("no usable cert installed")
@@ -131,7 +146,8 @@ func (a *app) setupNode() error {
 	if h.Role == netconf.RoleLighthouse {
 		h.Lighthouses = nil // it was one of them; start from what we learn now
 	}
-	h.Role, h.Name, h.NebulaIP, h.ListenPort, h.Relay = netconf.RoleNode, c.Name, c.Networks[0], 0, false
+	h.Role, h.Name, h.NebulaIP, h.ListenPort, h.Relay, h.DNS = netconf.RoleNode, c.Name, c.Networks[0], 0, false, false
+	h.Domain = a.knownDomain(h, got.domain)
 
 	if len(learned) == 0 && a.haveCA() {
 		if network, err := a.loadNetwork(); err == nil {
@@ -174,43 +190,65 @@ func (a *app) setupNode() error {
 	if err := a.askFirewall(h); err != nil {
 		return err
 	}
+	if err := a.askResolve(h); err != nil {
+		return err
+	}
 	if err := a.apply(h); err != nil {
 		return err
 	}
 	a.p.Printf("\nTry it: ping %s\n", h.Lighthouses[0].NebulaIP)
+	a.resolveHint(h)
 	return nil
 }
 
+// learned is what a cert's source says about the network.
+type learned struct {
+	lighthouses []netconf.Lighthouse
+	domain      string
+}
+
 // obtainCert leaves ca.crt, host.crt and host.key in the config directory,
-// and returns any lighthouses a bundle carried.
-func (a *app) obtainCert(role string) ([]netconf.Lighthouse, error) {
+// and returns what a bundle or the local CA said about the network.
+func (a *app) obtainCert(role string) (learned, error) {
 	if c := a.currentCert(); c != nil {
 		ip := strings.Join(c.Networks, ",")
 		d := daysLeft(c.NotAfter)
 		a.p.Printf("This host has a cert for %s (%s), valid until %s.\n", c.Name, ip, c.NotAfter.Format("2006-01-02"))
-		keep, err := a.p.Confirm("Keep it?", d > 0)
+		keep := d > 0
+		if a.haveCA() {
+			if n, err := a.loadNetwork(); err == nil && n.Domain != "" && !netconf.Under(c.Name, n.Domain) {
+				a.p.Printf("Its name isn't under %s, so DNS can't find it; answer n to rename it.\n", n.Domain)
+				keep = false
+			}
+		}
+		keep, err := a.p.Confirm("Keep it?", keep)
 		if err != nil || keep {
-			return nil, err
+			if a.haveCA() {
+				if n, err2 := a.loadNetwork(); err2 == nil {
+					return learned{n.Lighthouses, n.Domain}, err
+				}
+			}
+			return learned{}, err
 		}
 	}
 	type option struct {
 		label string
-		run   func() ([]netconf.Lighthouse, error)
+		run   func() (learned, error)
 	}
 	var opts []option
 	if a.haveCA() {
 		opts = append(opts, option{"Sign it with the CA on this machine", a.certFromLocalCA})
 	} else if role == netconf.RoleLighthouse {
 		opts = append(opts,
-			option{"Create a new CA here, then sign this lighthouse's cert (a new network)", func() ([]netconf.Lighthouse, error) {
+			option{"Create a new CA here, then sign this lighthouse's cert (a new network)", func() (learned, error) {
 				if err := a.caInit(); err != nil {
-					return nil, err
+					return learned{}, err
 				}
 				return a.certFromLocalCA()
 			}},
-			option{"Import an existing CA (ca.crt and ca.key), then sign this lighthouse's cert", func() ([]netconf.Lighthouse, error) {
+			option{"Import an existing CA (ca.crt and ca.key), then sign this lighthouse's cert", func() (learned, error) {
 				if err := a.caImport("", ""); err != nil {
-					return nil, err
+					return learned{}, err
 				}
 				return a.certFromLocalCA()
 			}})
@@ -225,73 +263,77 @@ func (a *app) obtainCert(role string) ([]netconf.Lighthouse, error) {
 	}
 	i, err := a.p.Choose("How should this host get its certificate?", labels, 0)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	return opts[i].run()
 }
 
-func (a *app) certFromLocalCA() ([]netconf.Lighthouse, error) {
+func (a *app) certFromLocalCA() (learned, error) {
 	network, err := a.loadNetwork()
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
-	name, ip, groups, err := a.askHostCert(network, hostname(), "")
+	defName := hostname()
+	if c := a.currentCert(); c != nil {
+		defName = c.Name
+	}
+	r, err := a.askHostCert(network, defName, "")
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	if err := os.MkdirAll(a.cfgDir(), 0o755); err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	// Sign into a temporary key so a failure leaves the running setup alone.
 	tmpKey := a.hostKey() + ".new"
-	_, crt, err := a.issue(network, name, ip, groups, "", tmpKey)
+	_, crt, err := a.issue(network, r, "", tmpKey)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	defer os.Remove(tmpKey)
 	caData, err := os.ReadFile(a.caDirCrt())
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	crtData, err := os.ReadFile(crt)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	keyData, err := os.ReadFile(tmpKey)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	if _, err := a.installCert(caData, crtData, keyData); err != nil {
-		return nil, err
+		return learned{}, err
 	}
-	return network.Lighthouses, nil
+	return learned{network.Lighthouses, network.Domain}, nil
 }
 
-func (a *app) certFromBundle() ([]netconf.Lighthouse, error) {
+func (a *app) certFromBundle() (learned, error) {
 	text, err := a.p.Paste("Paste the bundle, from its BEGIN line to its END line:", bundle.End(bundle.KindBundle))
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	return a.installBundle(text)
 }
 
-func (a *app) installBundle(text string) ([]netconf.Lighthouse, error) {
+func (a *app) installBundle(text string) (learned, error) {
 	b, err := bundle.DecodeBundle(text)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	key := []byte(b.HostKey)
 	if b.HostKey == "" {
 		if key, err = a.waitingKey([]byte(b.HostCrt)); err != nil {
-			return nil, err
+			return learned{}, err
 		}
 	}
 	if _, err := a.installCert([]byte(b.CACrt), []byte(b.HostCrt), key); err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	os.Remove(a.pendingKey())
 	os.Remove(a.pendingPub())
-	return b.Lighthouses, nil
+	return learned{b.Lighthouses, b.Domain}, nil
 }
 
 // waitingKey finds the key made here for a request that crt answers.
@@ -315,13 +357,13 @@ func (a *app) waitingKey(crt []byte) ([]byte, error) {
 	return nil, errNoKey
 }
 
-func (a *app) certFromRequest() ([]netconf.Lighthouse, error) {
+func (a *app) certFromRequest() (learned, error) {
 	if err := a.makeRequest(); err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	text, err := a.p.Paste("\nPaste the bundle the CA host gives back:", bundle.End(bundle.KindBundle))
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	return a.installBundle(text)
 }
@@ -379,10 +421,10 @@ func (a *app) makeRequest() error {
 	return nil
 }
 
-func (a *app) certFromFiles() ([]netconf.Lighthouse, error) {
+func (a *app) certFromFiles() (learned, error) {
 	caPath, err := a.p.AskValid("Path to ca.crt", "ca.crt", fileExists)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	def := ""
 	if h := hostname(); h != "" && exists(filepath.Join(filepath.Dir(caPath), h+".crt")) {
@@ -390,20 +432,20 @@ func (a *app) certFromFiles() ([]netconf.Lighthouse, error) {
 	}
 	crtPath, err := a.p.AskValid("Path to this host's .crt", def, fileExists)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	keyPath, err := a.p.AskValid("Path to this host's .key", strings.TrimSuffix(crtPath, ".crt")+".key", fileExists)
 	if err != nil {
-		return nil, err
+		return learned{}, err
 	}
 	var data [3][]byte
 	for i, p := range []string{caPath, crtPath, keyPath} {
 		if data[i], err = pki.CheckFile(p); err != nil {
-			return nil, err
+			return learned{}, err
 		}
 	}
 	_, err = a.installCert(data[0], data[1], data[2])
-	return nil, err
+	return learned{}, err
 }
 
 // installCert checks the three files belong together, then writes them.
@@ -509,15 +551,19 @@ func (a *app) apply(h *netconf.Host) error {
 		return err
 	}
 	a.p.Printf("\nWrote %s (nebula -test passed).\n", a.cfgFile())
-	return a.startService()
+	dns, err := a.setResolver(h)
+	if err != nil {
+		return err
+	}
+	return a.startService(dns)
 }
 
-func (a *app) startService() error {
+func (a *app) startService(dns service.DNS) error {
 	if a.root != "" || a.noService {
 		a.p.Printf("Start nebula with: sudo %s -config %s\n", a.nebulaBin(), a.cfgFile())
 		return nil
 	}
-	if err := service.Install(a.goos, a.nebulaBin(), a.cfgFile()); err != nil {
+	if err := service.Install(a.goos, a.nebulaBin(), a.cfgFile(), dns); err != nil {
 		return err
 	}
 	a.p.Println("nebula is running and starts at boot. Check it with `nebctl status`.")

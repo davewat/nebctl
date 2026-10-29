@@ -55,14 +55,17 @@ Needs a public IP (or DNS name) and UDP 4242 reachable from the internet.
    | Nebula network | the private range for the network, e.g. `10.42.0.0/22` |
    | Years the CA is valid | Enter for 5; every host cert expires with the CA |
    | Protect ca.key with a passphrase? | Enter for no, or `y` to be asked on every signing |
-   | Host name for the cert | this server's name, e.g. `hs01.example.com` |
+   | Domain for Nebula host names | Enter for the suggestion, e.g. `nebula.example.com` (see [Names over Nebula](#names-over-nebula-dns)); `-` for none |
+   | Host name for the cert | a short name such as `hs01`; it gets the domain: `hs01.nebula.example.com` |
    | Nebula address | Enter for the first free address, or type one |
    | Groups | Enter for none |
    | UDP port to listen on | Enter for 4242 |
    | Public IP or DNS name | Enter if the detected IP is right, else type it |
    | Relay traffic for hosts that can't reach each other directly? | Enter for yes |
+   | Answer DNS for *.nebula.example.com? | Enter for yes |
    | What may other Nebula hosts reach on this one? | `1` Ping and SSH |
    | Other ports to open | e.g. `tcp/443`, or Enter for none |
+   | Look up *.nebula.example.com through 10.42.0.1? | Enter for yes |
    | Sign a cert for another host now? | `y` once per host, then `n` (or do it later, see step 6) |
 
 4. Open the UDP port, here and in your cloud provider's firewall:
@@ -96,7 +99,9 @@ Needs a public IP (or DNS name) and UDP 4242 reachable from the internet.
 the path to `ca.crt` (e.g. `/data/ca.crt`); `ca.key` is looked for beside it.
 Certs that CA already signed in the same directory are recorded, so their
 addresses are never handed out again. Signing one of those names again
-renews it at the same address. To give a host the cert files you made
+renews it at the same address. If their names aren't under the Nebula
+domain, sign each one's short name (`fe01` for `fe01.example.com`) and
+nebctl offers to rename it, keeping its address and groups. To give a host the cert files you made
 earlier, instead of a new cert:
 ```bash
 sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.com.key
@@ -126,6 +131,7 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
    | How should this host get its certificate? | `1` Paste a bundle, then paste it |
    | What may other Nebula hosts reach on this one? | `1` Ping and SSH |
    | Other ports to open | the ports this node serves, e.g. `tcp/443`, or Enter for none |
+   | Look up *.nebula.example.com through 10.42.0.1? | Enter for yes |
 
 5. Check it reaches the lighthouse (use the lighthouse's Nebula address):
    ```bash
@@ -162,6 +168,7 @@ sudo nebctl ca bundle -crt /data/fe01.example.com.crt -key /data/fe01.example.co
    | How should this host get its certificate? | `1` Paste a bundle, then paste it |
    | What may other Nebula hosts reach on this one? | `2` Ping only (or `1` if you SSH into this Mac) |
    | Other ports to open | Enter for none |
+   | Look up *.nebula.example.com through 10.42.0.1? | Enter for yes |
 
    If macOS asks whether `nebula` may accept incoming connections, allow it.
 5. Check it reaches the lighthouse:
@@ -200,6 +207,44 @@ Instead of steps 2 to 4 above, so the private key never leaves the node:
 | List every signed cert | `sudo nebctl ca list` |
 | Stop or start nebula | `sudo nebctl service stop` / `start` |
 | Review this machine's security | `sudo nebctl audit` |
+| Turn on, change or turn off Nebula DNS | `sudo nebctl dns` |
+
+### Names over Nebula (DNS)
+
+Hosts can reach each other by name, such as `ssh fe01.nebula.example.com`,
+instead of by Nebula address. Each lighthouse can answer DNS on its Nebula
+address (port 53, reachable over Nebula only). It answers with the address
+of every host that is connected, looked up by the name in that host's cert.
+Every host sends lookups for names under the network's domain to the
+lighthouse, and all other lookups go to its usual DNS.
+
+The lighthouse returns "not found" for any name it doesn't know and never
+passes the query on, so **the domain must be one only Nebula uses**. Your
+public domain won't work: sending all of `example.com` to the lighthouse
+would break `www.example.com`. A subdomain such as `nebula.example.com` (with
+no public records) or `nebula.internal` works.
+
+How a host sends those lookups:
+
+| OS | How |
+|---|---|
+| Linux | systemd-resolved, through the `nebula1` device. The service sets it with `resolvectl` each time nebula starts. |
+| macOS | `/etc/resolver/<domain>`. `ping`, `ssh` and browsers use it; `dig` and `nslookup` don't, so check with `dscacheutil -q host -a name <name>`. |
+
+**Turning DNS on for a network set up before v0.3.0:**
+
+1. On the lighthouse that holds the CA, run `sudo nebctl dns`. It asks for
+   the domain, offers to sign the lighthouse's own cert again under the
+   domain (same address), turns on DNS there, and lists the certs that still
+   need new names.
+2. Still on the lighthouse, for each other host, run `sudo nebctl ca sign`
+   and type its short name (e.g. `fe01`). nebctl offers to rename the cert,
+   keeping its address.
+3. On each host, run `sudo nebctl node`, answer `n` to "Keep it?", and paste
+   its new bundle. The bundle carries the domain, so DNS is set up as well.
+
+The old certs keep working until they expire, so hosts can switch over one
+at a time.
 
 ### Security audit
 
@@ -242,7 +287,8 @@ sudo ufw delete allow OpenSSH
 | `/etc/nebula/nebctl.json` | this host's answers; `sudo nebctl config` regenerates the config from it |
 | `/etc/nebula/ca.crt`, `host.crt`, `host.key` | this host's certs |
 | `/etc/nebula/ca/` (0700) | the CA, if this machine holds it: `ca.key`, `network.json` (address range, lighthouses, signed certs) and `issued/` |
-| `/etc/systemd/system/nebula.service` | the Linux service |
+| `/etc/systemd/system/nebula.service` | the Linux service; with DNS on, it also routes the domain to the lighthouses each time nebula starts |
+| `/etc/resolver/<domain>` | on macOS with DNS on: sends lookups for the Nebula domain to the lighthouses |
 | `/Library/LaunchDaemons/net.nebctl.nebula.plist` | the macOS service; logs go to `/var/log/nebula.log` |
 
 Back up `/etc/nebula/ca/ca.key` somewhere offline. Host certs expire when the
@@ -252,7 +298,7 @@ again renews the cert at the same address.
 ## Commands
 
 ```
-lighthouse | node | request | config | status | audit [-json] [-offline]
+lighthouse | node | request | config | status | dns | audit [-json] [-offline]
 install [-version vX.Y.Z] [-force]     update [-version vX.Y.Z] [-force]
 service start|stop|restart|status|uninstall
 ca init | import | sign | sign-request | bundle | lighthouse | list

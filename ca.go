@@ -91,6 +91,10 @@ func (a *app) caInit() error {
 	if err != nil {
 		return err
 	}
+	domain, err := a.askDomain(defaultDomain(name))
+	if err != nil {
+		return err
+	}
 	prefix := netip.MustParsePrefix(strings.TrimSpace(cidr)).Masked()
 	n, _ := strconv.Atoi(years)
 
@@ -104,7 +108,7 @@ func (a *app) caInit() error {
 	}); err != nil {
 		return err
 	}
-	network := &netconf.Network{CIDR: prefix.String()}
+	network := &netconf.Network{CIDR: prefix.String(), Domain: domain}
 	if err := network.Save(a.networkFile()); err != nil {
 		return err
 	}
@@ -194,6 +198,15 @@ func (a *app) caImport(crtPath, keyPath string) error {
 		cidr = netip.MustParsePrefix(strings.TrimSpace(cidr)).Masked().String()
 	}
 
+	var names []string
+	for _, f := range found {
+		names = append(names, f.Name)
+	}
+	domain, err := a.askDomain(defaultDomain(ca.Name, names...))
+	if err != nil {
+		return err
+	}
+
 	if err := a.prepareCADir(); err != nil {
 		return err
 	}
@@ -203,7 +216,7 @@ func (a *app) caImport(crtPath, keyPath string) error {
 	if err := writeFile(a.caDirKey(), keyData, 0o600); err != nil {
 		return err
 	}
-	network := &netconf.Network{CIDR: cidr}
+	network := &netconf.Network{CIDR: cidr, Domain: domain}
 	for _, f := range found {
 		data, err := os.ReadFile(filepath.Join(filepath.Dir(crtPath), f.Name+".crt"))
 		if err == nil {
@@ -225,15 +238,54 @@ func (a *app) caImport(crtPath, keyPath string) error {
 	return nil
 }
 
+// certReq is a cert about to be signed. Replaces names the cert it renames.
+type certReq struct {
+	name     string
+	ip       netip.Prefix
+	groups   []string
+	replaces string
+}
+
 // askHostCert asks for a cert's name, address and groups. A name the CA
-// signed before keeps its address, so a re-sign renews it.
-func (a *app) askHostCert(network *netconf.Network, defName, defIP string) (string, netip.Prefix, []string, error) {
-	name, err := a.p.AskValid("Host name for the cert", defName, netconf.ValidName)
+// signed before keeps its address, so a re-sign renews it. With a domain,
+// a short name gets the domain, and a name that moves an older cert into
+// the domain takes over its address.
+func (a *app) askHostCert(network *netconf.Network, defName, defIP string) (certReq, error) {
+	q := "Host name for the cert"
+	if network.Domain != "" {
+		q = "Host name for the cert (a short name gets ." + network.Domain + ")"
+		if defName != "" && !netconf.Under(defName, network.Domain) {
+			defName = netconf.ShortName(defName)
+		}
+	}
+	name, err := a.p.AskValid(q, defName, netconf.ValidName)
 	if err != nil {
-		return "", netip.Prefix{}, nil, err
+		return certReq{}, err
+	}
+	name = netconf.Qualify(name, network.Domain)
+	if network.Domain != "" {
+		a.p.Printf("  The cert is for %s.\n", name)
+		if strings.Contains(name, "_") {
+			a.p.Println("  DNS names can't hold '_', so lookups for it will fail; use '-' instead.")
+		}
 	}
 	prev, renewing := network.Find(name)
+	replaces := ""
+	if !renewing {
+		if old, ok := network.Renames(name); ok {
+			a.p.Printf("  %s has %s.\n", old.Name, old.NebulaIP)
+			move, err := a.p.Confirm("  Rename it to "+name+", keeping its address and groups?", true)
+			if err != nil {
+				return certReq{}, err
+			}
+			if move {
+				prev, replaces, renewing = old, old.Name, true
+			}
+		}
+	}
 	switch {
+	case replaces != "":
+		defIP = prev.NebulaIP
 	case renewing:
 		a.p.Printf("  %s already has %s; signing again renews it.\n", name, prev.NebulaIP)
 		defIP = prev.NebulaIP
@@ -246,7 +298,7 @@ func (a *app) askHostCert(network *netconf.Network, defName, defIP string) (stri
 	}
 	if defIP == "" {
 		if defIP, err = network.NextFree(); err != nil {
-			return "", netip.Prefix{}, nil, err
+			return certReq{}, err
 		}
 	}
 	var ip netip.Prefix
@@ -255,26 +307,27 @@ func (a *app) askHostCert(network *netconf.Network, defName, defIP string) (stri
 		if err != nil {
 			return err
 		}
-		if owner, used := network.Owner(p.Addr()); used && owner != name {
+		if owner, used := network.Owner(p.Addr()); used && owner != name && owner != replaces {
 			return fmt.Errorf("%s belongs to %s", p.Addr(), owner)
 		}
 		ip = p
 		return nil
 	})
 	if err != nil {
-		return "", netip.Prefix{}, nil, err
+		return certReq{}, err
 	}
 	groups, err := a.p.Ask("Groups, comma separated (optional; firewall rules can match them)", strings.Join(prev.Groups, ","))
 	if err != nil {
-		return "", netip.Prefix{}, nil, err
+		return certReq{}, err
 	}
-	return name, ip, splitList(groups), nil
+	return certReq{name: name, ip: ip, groups: splitList(groups), replaces: replaces}, nil
 }
 
 // issue signs a cert for name into the CA's issued directory and records
 // it. With pubPath it signs that public key; otherwise it writes a new
 // private key to keyPath.
-func (a *app) issue(network *netconf.Network, name string, ip netip.Prefix, groups []string, pubPath, keyPath string) (pki.Cert, string, error) {
+func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string) (pki.Cert, string, error) {
+	name, ip, groups := r.name, r.ip, r.groups
 	crt := filepath.Join(a.issuedDir(), name+".crt")
 	if err := os.MkdirAll(a.issuedDir(), 0o700); err != nil {
 		return pki.Cert{}, "", err
@@ -299,12 +352,19 @@ func (a *app) issue(network *netconf.Network, name string, ip netip.Prefix, grou
 		return pki.Cert{}, "", err
 	}
 	c := certs[0]
+	if r.replaces != "" {
+		network.Remove(r.replaces)
+		os.Remove(filepath.Join(a.issuedDir(), r.replaces+".crt"))
+	}
 	network.Record(netconf.Issued{Name: name, NebulaIP: ip.String(), Groups: groups,
 		Fingerprint: c.Fingerprint, NotAfter: c.NotAfter, IssuedAt: time.Now().UTC().Truncate(time.Second)})
 	if err := network.Save(a.networkFile()); err != nil {
 		return pki.Cert{}, "", err
 	}
 	a.p.Printf("Signed %s as %s, valid until %s.\n", name, ip, c.NotAfter.Format("2006-01-02"))
+	if r.replaces != "" {
+		a.p.Printf("It replaces %s, which is no longer recorded.\n", r.replaces)
+	}
 	return c, crt, nil
 }
 
@@ -349,7 +409,11 @@ func (a *app) askLighthouse(defIP string) (netconf.Lighthouse, error) {
 	if err != nil {
 		return netconf.Lighthouse{}, err
 	}
-	return netconf.Lighthouse{NebulaIP: strings.TrimSpace(ip), Endpoints: []string{ep}, Relay: relay}, nil
+	dns, err := a.p.Confirm("Does it answer DNS for Nebula host names?", false)
+	if err != nil {
+		return netconf.Lighthouse{}, err
+	}
+	return netconf.Lighthouse{NebulaIP: strings.TrimSpace(ip), Endpoints: []string{ep}, Relay: relay, DNS: dns}, nil
 }
 
 func (a *app) caLighthouse() error {
@@ -391,7 +455,7 @@ func (a *app) caSign(out string) error {
 		return err
 	}
 	a.p.Println("\nSigning a cert for another host. Its private key is made here and goes in the bundle.")
-	name, ip, groups, err := a.askHostCert(network, "", "")
+	r, err := a.askHostCert(network, "", "")
 	if err != nil {
 		return err
 	}
@@ -401,11 +465,12 @@ func (a *app) caSign(out string) error {
 	}
 	defer os.RemoveAll(tmp)
 	key := filepath.Join(tmp, "host.key")
-	_, crt, err := a.issue(network, name, ip, groups, "", key)
+	_, crt, err := a.issue(network, r, "", key)
 	if err != nil {
 		return err
 	}
-	b, err := a.bundleFor(network, name, crt, key)
+	a.renamed = r.replaces
+	b, err := a.bundleFor(network, r.name, crt, key)
 	if err != nil {
 		return err
 	}
@@ -421,7 +486,8 @@ func (a *app) bundleFor(network *netconf.Network, name, crtPath, keyPath string)
 	if err != nil {
 		return bundle.Bundle{}, err
 	}
-	b := bundle.Bundle{Name: name, CACrt: string(caData), HostCrt: string(crtData), Lighthouses: network.Lighthouses}
+	b := bundle.Bundle{Name: name, CACrt: string(caData), HostCrt: string(crtData),
+		Lighthouses: network.Lighthouses, Domain: network.Domain}
 	if keyPath != "" {
 		keyData, err := os.ReadFile(keyPath)
 		if err != nil {
@@ -436,6 +502,11 @@ func (a *app) emitBundle(b bundle.Bundle, out string) error {
 	text, err := bundle.EncodeBundle(b)
 	if err != nil {
 		return err
+	}
+	if a.renamed != "" {
+		a.p.Printf("\nThe old cert for %s keeps working until it expires. On that host, set\n", a.renamed)
+		a.p.Println("up nebctl with this bundle in its place, and delete the old cert files there.")
+		a.renamed = ""
 	}
 	if b.HostKey != "" {
 		a.p.Printf("\nThis bundle holds %s's private key. Move it only over something you trust\n", b.Name)
@@ -487,7 +558,7 @@ func (a *app) caSignRequest(in, out string) error {
 	if err := a.ensureLighthouses(network); err != nil {
 		return err
 	}
-	name, ip, groups, err := a.askHostCert(network, req.Name, req.NebulaIP)
+	r, err := a.askHostCert(network, req.Name, req.NebulaIP)
 	if err != nil {
 		return err
 	}
@@ -500,11 +571,12 @@ func (a *app) caSignRequest(in, out string) error {
 	if err := os.WriteFile(pubPath, []byte(req.PublicKey), 0o600); err != nil {
 		return err
 	}
-	_, crt, err := a.issue(network, name, ip, groups, pubPath, "")
+	_, crt, err := a.issue(network, r, pubPath, "")
 	if err != nil {
 		return err
 	}
-	b, err := a.bundleFor(network, name, crt, "")
+	a.renamed = r.replaces
+	b, err := a.bundleFor(network, r.name, crt, "")
 	if err != nil {
 		return err
 	}
@@ -582,7 +654,11 @@ func (a *app) caList() error {
 		a.p.Println("No certs signed yet.")
 		return nil
 	}
-	a.p.Printf("Network %s\n\n", network.CIDR)
+	a.p.Printf("Network %s", network.CIDR)
+	if network.Domain != "" {
+		a.p.Printf(", names under %s", network.Domain)
+	}
+	a.p.Printf("\n\n")
 	a.p.Printf("  %-28s %-18s %-12s %s\n", "NAME", "ADDRESS", "EXPIRES", "GROUPS")
 	for _, i := range network.Issued {
 		exp := i.NotAfter.Format("2006-01-02")
