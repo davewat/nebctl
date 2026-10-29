@@ -33,6 +33,7 @@ Set up this machine:
   request                    make a key here and a request for the CA host to sign
   config                     rewrite config.yml from nebctl.json and restart nebula
   status                     show what is set up here
+  audit [-json] [-offline]   review this machine's security; exits 1 on any FAIL
 
 Nebula itself:
   install [-version vX.Y.Z] [-force]   install nebula and nebula-cert
@@ -84,6 +85,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := a.run(fs.Args()); err != nil {
+		if errors.Is(err, errAuditFailed) {
+			os.Exit(1)
+		}
 		if errors.Is(err, prompt.ErrClosed) {
 			fmt.Fprintln(os.Stderr)
 			os.Exit(1)
@@ -119,6 +123,8 @@ func (a *app) run(args []string) error {
 		return a.reconfigure()
 	case "status":
 		return a.status()
+	case "audit":
+		return a.auditCmd(rest)
 	case "install", "update":
 		fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 		tag := fs.String("version", "", "release tag, e.g. v1.11.2 (default: latest)")
@@ -233,6 +239,7 @@ func (a *app) menu() error {
 			"Certificate authority: create, import, sign certs for other hosts",
 			"Install or update nebula",
 			"Status",
+			"Security audit of this machine",
 			"Quit",
 		}, a.defaultChoice())
 		if err != nil {
@@ -249,6 +256,10 @@ func (a *app) menu() error {
 			err = a.update("", false)
 		case 4:
 			err = a.status()
+		case 5:
+			if err = a.audit(false, false); errors.Is(err, errAuditFailed) {
+				err = nil
+			}
 		default:
 			return nil
 		}
