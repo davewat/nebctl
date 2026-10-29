@@ -3,407 +3,242 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nebctl: set up Nebula by answering questions</title>
-<meta name="description" content="nebctl sets up Nebula on Linux and macOS: the lighthouse, the certificate authority, and every host that joins. Nebula Node does the Mac side in a window.">
+<title>nebctl: light up your Nebula network</title>
+<meta name="description" content="nebctl sets up Nebula on Linux and macOS: the lighthouse, the certificate authority and every machine that joins. Nebula Node does the Mac side in a window.">
 <meta property="og:title" content="nebctl">
-<meta property="og:description" content="Join a host to your Nebula network with one paste.">
+<meta property="og:description" content="One lighthouse. Every machine you own, on one network.">
 <meta property="og:image" content="https://davewat.github.io/nebctl/app.png">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 14 L4 30 Q10 32 14 26 Z' fill='%23B0157A'/%3E%3Ccircle cx='16' cy='12' r='5' fill='%231D2B3A'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23070B1A'/%3E%3Ccircle cx='16' cy='16' r='9' fill='%23FDBA74' opacity='.3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FDBA74'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;800&family=Source+Serif+4:ital,opsz,wght@1,8..60,400;1,8..60,600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Sora', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'ui-monospace', 'Menlo', 'monospace'],
+        },
+        colors: {
+          night: '#070B1A',
+          deep: '#0E1530',
+          edge: '#22305A',
+          star: '#C9D3F2',
+          dim: '#8390B5',
+          flare: '#F472B6',
+          ember: '#FDBA74',
+        },
+      },
+    },
+  }
+</script>
 <style>
-  /* A nautical chart: deep water is the page, land is buff, shallow water
-     is a blue tint, and lights are magenta, as on a printed chart. */
-  :root {
-    --water: #F7FAF7;
-    --shoal: #D4E8EF;
-    --land: #EFE0B4;
-    --ink: #1D2B3A;
-    --sounding: #4A7799;
-    --light: #B0157A;
-    --light-ink: #FFFFFF;
-    --rule: #C3D3DC;
-    --sans: "Public Sans", "Helvetica Neue", Arial, sans-serif;
-    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
-    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-    color-scheme: light;
-  }
-  /* Night chart, as bridge displays dim them after dark. */
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --water: #0F1E2C;
-      --shoal: #17344A;
-      --land: #3B3526;
-      --ink: #DCE6EE;
-      --sounding: #86ADCB;
-      --light: #F26FC0;
-      --light-ink: #20101A;
-      --rule: #2A4559;
-      color-scheme: dark;
-    }
-  }
-
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0;
-    background: var(--water);
-    color: var(--ink);
-    font: 400 1.0625rem/1.6 var(--sans);
-  }
-  a { color: var(--light); text-underline-offset: 0.18em; }
-  a:focus-visible, button:focus-visible { outline: 3px solid var(--light); outline-offset: 3px; border-radius: 2px; }
-  img { max-width: 100%; height: auto; display: block; }
-  code { font: 0.9em var(--mono); }
-
-  .wrap { max-width: 72rem; margin: 0 auto; padding-inline: 1.5rem; }
-
-  /* Header */
-  .top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 1.25rem; }
-  .mark { display: flex; align-items: center; gap: 0.55rem; font-weight: 800; font-size: 1.25rem; letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
-  .mark svg { width: 1.6rem; height: 1.6rem; }
-  .top nav { display: flex; gap: 1.25rem; font-weight: 600; font-size: 0.95rem; }
-  .top nav a { color: var(--ink); text-decoration: none; }
-  .top nav a:hover { color: var(--light); }
-
-  /* Hero */
-  .hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 3rem; align-items: center; padding-block: 2.5rem 4rem; }
-  .hero h1 { font-weight: 800; font-size: clamp(2.4rem, 5vw, 3.9rem); line-height: 1.04; letter-spacing: -0.025em; margin: 0 0 1.25rem; text-wrap: balance; }
-  .lead { font-size: 1.2rem; max-width: 34rem; margin: 0 0 2rem; }
-  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
-  .btn { display: inline-block; padding: 0.8rem 1.3rem; border-radius: 0.4rem; font-weight: 600; text-decoration: none; border: 2px solid var(--light); }
-  .btn.primary { background: var(--light); color: var(--light-ink); }
-  .btn.quiet { color: var(--light); }
-  .btn:hover { filter: brightness(1.08); }
-  .fine { font-size: 0.92rem; color: var(--sounding); margin: 0; }
-
-  /* The chart */
-  .chart { margin: 0; }
-  .chart svg { width: 100%; height: auto; display: block; border: 1px solid var(--ink); outline: 4px solid var(--water); outline-offset: -6px; }
-  .chart figcaption { font: italic 400 0.98rem/1.45 var(--serif); color: var(--sounding); margin-top: 0.75rem; }
-  .c-water { fill: var(--water); }
-  .c-shoal { fill: var(--shoal); }
-  .c-land { fill: var(--land); stroke: var(--ink); stroke-width: 1.4; }
-  .c-depth { fill: none; stroke: var(--sounding); stroke-width: 0.9; opacity: 0.7; }
-  .c-depth.far { stroke-dasharray: 2 4; }
-  .c-label { font: italic 400 13px var(--serif); fill: var(--ink); }
-  .c-addr { font: italic 400 11.5px var(--serif); fill: var(--sounding); }
-  .c-title { font: 600 12px var(--sans); fill: var(--ink); }
-  .c-checkin { stroke: var(--sounding); stroke-width: 1.2; stroke-dasharray: 1 4; stroke-linecap: round; fill: none; }
-  .c-tunnel { stroke: var(--light); stroke-width: 1.6; stroke-dasharray: 7 5; fill: none; }
-  .c-host { fill: var(--water); stroke: var(--ink); stroke-width: 1.5; }
-  .c-flare { fill: var(--light); }
-  .c-dot { fill: var(--ink); }
-
-  /* One sequence on load: the light shows, hosts check in, tunnels open. */
-  @media (prefers-reduced-motion: no-preference) {
-    .c-flare { transform-origin: 432px 166px; animation: flash 1.4s ease-out both; }
-    .c-checkin, .c-tunnel, .c-hostgroup { animation: appear 0.6s ease-out both; animation-delay: var(--d, 0s); }
-  }
-  @keyframes flash { 0% { opacity: 0; transform: scale(0.6); } 45% { opacity: 1; transform: scale(1.15); } 100% { opacity: 1; transform: scale(1); } }
-  @keyframes appear { from { opacity: 0; } to { opacity: 1; } }
-
-  /* Sections */
-  section { padding-block: 4rem; border-top: 1px solid var(--rule); }
-  h2 { font-weight: 800; font-size: clamp(1.7rem, 3vw, 2.3rem); line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 0.75rem; }
-  h3 { font-weight: 600; font-size: 1.2rem; line-height: 1.3; margin: 0 0 0.4rem; }
-  .intro { max-width: 40rem; margin: 0 0 2.5rem; }
-
-  /* Steps: a real sequence, so numbered. */
-  .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2rem; counter-reset: step; }
-  .steps > li { counter-increment: step; display: flex; flex-direction: column; }
-  .steps > li::before {
-    content: counter(step);
-    display: grid; place-items: center;
-    width: 2.2rem; height: 2.2rem; margin-bottom: 0.9rem;
-    border: 2px solid var(--ink); border-radius: 50%;
-    font-weight: 800;
-  }
-  .steps p { margin: 0 0 1rem; }
-  .steps .term { flex: 1; }
-  .where { font: italic 400 1rem var(--serif); color: var(--sounding); margin: 0 0 0.4rem; }
-
-  /* Terminal excerpts, framed like a chart inset. */
-  .term {
-    margin: 0;
-    border: 1px solid var(--ink);
-    outline: 3px solid var(--water); outline-offset: -5px;
-    background: color-mix(in srgb, var(--shoal) 35%, var(--water));
-    padding: 1rem 1.1rem;
-    overflow-x: auto;
-    font: 400 0.8rem/1.55 var(--mono);
-    white-space: pre;
-  }
-  .term b { font-weight: 400; color: var(--light); }
-  .term i { font-style: normal; color: var(--sounding); }
-
-  /* Mac app */
-  .app { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 3rem; align-items: start; }
-  .shot { margin: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--rule); box-shadow: 0 1px 0 var(--rule), 0 18px 40px -24px rgba(29, 43, 58, 0.45); background: #fff; }
-  .shot img { width: 100%; }
-  .app ul { margin: 1.25rem 0 1.5rem; padding-left: 1.2rem; }
-  .app li { margin-bottom: 0.5rem; }
-  .note { font-size: 0.95rem; border-left: 3px solid var(--light); padding: 0.2rem 0 0.2rem 1rem; margin: 1.5rem 0 0; }
-
-  /* What else: a plain two-column list. */
-  .more { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2.25rem 3rem; margin: 0; }
-  .more div { border-top: 2px solid var(--ink); padding-top: 0.9rem; }
-  .more dt { font-weight: 600; font-size: 1.15rem; margin-bottom: 0.35rem; }
-  .more dd { margin: 0; max-width: 34rem; }
-
-  /* Downloads */
-  .files { width: 100%; border-collapse: collapse; margin: 0 0 2rem; font-size: 0.98rem; }
-  .files th, .files td { text-align: left; padding: 0.7rem 1rem 0.7rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
-  .files th { font-weight: 600; color: var(--sounding); }
-  .files td:last-child { white-space: nowrap; }
-  .table-scroll { overflow-x: auto; }
-  .dl-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; max-width: 52rem; }
-
-  footer { border-top: 1px solid var(--rule); padding-block: 2.5rem 3rem; font-size: 0.95rem; color: var(--sounding); }
-  footer p { margin: 0 0 0.4rem; max-width: 46rem; }
-
-  @media (max-width: 960px) {
-    .hero, .app { grid-template-columns: minmax(0, 1fr); }
-    .hero { gap: 2.5rem; padding-top: 1.5rem; }
-    .steps { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
-  }
-  @media (max-width: 640px) {
-    .wrap { padding-inline: 1rem; }
-    .top nav a.hide-sm { display: none; }
-    .more { grid-template-columns: minmax(0, 1fr); }
-    section { padding-block: 3rem; }
-    .lead { font-size: 1.1rem; }
+  :focus-visible { outline: 2px solid #FDBA74; outline-offset: 3px; border-radius: 6px; }
+  .nebula-bg {
+    background:
+      radial-gradient(60% 50% at 70% 40%, rgba(244,114,182,.18), transparent 70%),
+      radial-gradient(45% 40% at 30% 70%, rgba(99,102,241,.22), transparent 70%),
+      radial-gradient(35% 30% at 80% 80%, rgba(253,186,116,.10), transparent 70%),
+      #070B1A;
   }
 </style>
 </head>
-<body>
+<body class="bg-night text-star font-sans antialiased">
 
-<header class="wrap top">
-  <a class="mark" href="./" aria-label="nebctl home">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 14 L4 30 Q10 32 14 26 Z" fill="var(--light)"/><circle cx="16" cy="12" r="5" fill="var(--ink)"/></svg>
-    nebctl
-  </a>
-  <nav aria-label="Project">
-    <a href="#download">Download</a>
-    <a class="hide-sm" href="https://github.com/davewat/nebctl/releases">Releases</a>
-    <a href="https://github.com/davewat/nebctl">GitHub</a>
-  </nav>
-</header>
+<!-- Hero: a live mesh behind the words -->
+<section class="nebula-bg relative min-h-[92vh] flex flex-col overflow-hidden">
+  <canvas id="mesh" class="absolute inset-0 w-full h-full" aria-hidden="true"></canvas>
+  <header class="relative max-w-6xl w-full mx-auto px-5 sm:px-8 py-6 flex items-center justify-between">
+    <a href="./" class="flex items-center gap-2.5 font-semibold text-white text-lg">
+      <span class="relative w-3 h-3"><span class="absolute inset-0 rounded-full bg-ember"></span><span class="absolute -inset-1.5 rounded-full bg-ember/30"></span></span>
+      nebctl
+    </a>
+    <nav class="flex items-center gap-6 text-sm text-dim">
+      <a href="#how" class="hidden sm:inline hover:text-white">How it works</a>
+      <a href="#download" class="hover:text-white">Download</a>
+      <a href="https://github.com/davewat/nebctl" class="hover:text-white">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="relative flex-1 flex items-center">
+    <div class="max-w-6xl w-full mx-auto px-5 sm:px-8 py-16">
+      <h1 class="max-w-4xl text-5xl sm:text-6xl lg:text-7xl font-light tracking-tight text-white leading-[1.02]">
+        One lighthouse.<br>Every machine you own,<br><span class="font-semibold">on one network.</span>
+      </h1>
+      <p class="mt-8 max-w-xl text-lg text-star/90 leading-relaxed">
+        nebctl sets up <a class="text-white underline decoration-flare/60 underline-offset-4 hover:decoration-flare" href="https://github.com/slackhq/nebula">Nebula</a>, the mesh network Slack built, on Linux and macOS. It makes the certificates, writes the configs, starts the services and gives every machine a name.
+      </p>
+      <div class="mt-10 flex flex-wrap gap-3">
+        <a href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip" class="rounded-full bg-ember text-night font-semibold px-6 py-3.5 hover:bg-white">Download for Mac</a>
+        <a href="#download" class="rounded-full border border-star/30 text-white font-semibold px-6 py-3.5 hover:border-white backdrop-blur-sm">Linux command-line tool</a>
+      </div>
+    </div>
+  </div>
+</section>
 
 <main>
-<div class="wrap hero">
-  <div>
-    <h1>Join a host to your Nebula network with one paste.</h1>
-    <p class="lead">nebctl sets up <a href="https://github.com/slackhq/nebula">Nebula</a> on Linux and macOS: the lighthouse every host checks in with, the certificate authority that signs each host, and the hosts that join. It asks plain questions, then writes the config, the service and the DNS for you.</p>
-    <div class="actions">
-      <a class="btn primary" href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip">Download Nebula Node for Mac</a>
-      <a class="btn quiet" href="#download">Get the command-line tool</a>
+  <!-- How it works: vertical timeline -->
+  <section id="how" class="max-w-6xl mx-auto px-5 sm:px-8 py-24 grid lg:grid-cols-[1fr_1.4fr] gap-14">
+    <div class="lg:sticky lg:top-10 self-start">
+      <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight">From one server to a whole network</h2>
+      <p class="mt-4 text-dim leading-relaxed">Only the lighthouse needs a public address. Every other machine checks in with it once, then talks to the others directly.</p>
     </div>
-    <p class="fine">The Mac app needs macOS 14 or later. The command-line tool runs on any Linux with systemd, and on macOS.</p>
-  </div>
-
-  <figure class="chart">
-    <svg viewBox="0 0 600 500" role="img" aria-labelledby="chart-title chart-desc">
-      <title id="chart-title">A Nebula network drawn as a nautical chart</title>
-      <desc id="chart-desc">A lighthouse at 10.42.0.1 on a headland, reachable on UDP port 4242. Four hosts, fe01, be01, mac01 and build01, check in with it and open direct tunnels to each other.</desc>
-      <rect class="c-water" width="600" height="500"/>
-      <!-- shallow water along the coast -->
-      <path class="c-shoal" d="M600 0 V250 C560 262 520 258 492 238 C470 222 462 200 440 194 C410 186 388 176 380 150 C372 120 392 96 410 72 C428 46 432 22 428 0 Z"/>
-      <!-- land -->
-      <path class="c-land" d="M600 0 V205 C568 214 540 210 520 196 C500 182 490 168 468 164 C450 160 438 160 432 152 C426 142 438 128 446 108 C456 84 470 64 468 38 C466 20 458 8 456 0 Z"/>
-      <!-- depth contours -->
-      <path class="c-depth" d="M600 296 C548 306 500 296 470 270 C446 250 430 236 400 228 C366 218 346 196 344 160 C342 120 362 92 380 64 C396 38 398 16 396 0"/>
-      <path class="c-depth far" d="M600 350 C540 360 482 346 446 316 C416 290 392 280 356 268 C316 254 296 220 296 170 C296 118 318 80 336 46 C346 26 348 10 346 0"/>
-      <path class="c-depth far" d="M600 418 C532 426 460 410 414 376 C380 350 350 336 312 322 C262 304 238 260 238 196 C238 132 262 82 280 40 C286 24 288 10 288 0"/>
-
-      <!-- every host checks in with the lighthouse -->
-      <path class="c-checkin" style="--d:0.9s" d="M432 166 L150 108"/>
-      <path class="c-checkin" style="--d:1.15s" d="M432 166 L118 300"/>
-      <path class="c-checkin" style="--d:1.4s" d="M432 166 L300 424"/>
-      <path class="c-checkin" style="--d:1.65s" d="M432 166 L500 396"/>
-      <!-- then talk to each other directly -->
-      <path class="c-tunnel" style="--d:2.1s" d="M150 108 L118 300 L300 424"/>
-      <path class="c-tunnel" style="--d:2.35s" d="M300 424 L500 396"/>
-
-      <!-- the lighthouse: chart light symbol, a magenta flare -->
-      <path class="c-flare" d="M432 166 L392 230 C404 240 420 238 428 226 Z"/>
-      <circle class="c-dot" cx="432" cy="166" r="5"/>
-      <text class="c-label" x="444" y="146">lh.nebula.example.com</text>
-      <text class="c-addr" x="444" y="161">10.42.0.1, UDP 4242</text>
-
-      <g class="c-hostgroup" style="--d:0.9s"><circle class="c-host" cx="150" cy="108" r="6"/><text class="c-label" x="76" y="90">fe01</text><text class="c-addr" x="76" y="104">10.42.0.2</text></g>
-      <g class="c-hostgroup" style="--d:1.15s"><circle class="c-host" cx="118" cy="300" r="6"/><text class="c-label" x="44" y="330">be01</text><text class="c-addr" x="44" y="344">10.42.0.3</text></g>
-      <g class="c-hostgroup" style="--d:1.4s"><circle class="c-host" cx="300" cy="424" r="6"/><text class="c-label" x="230" y="452">mac01</text><text class="c-addr" x="230" y="466">10.42.0.12</text></g>
-      <g class="c-hostgroup" style="--d:1.65s"><circle class="c-host" cx="500" cy="396" r="6"/><text class="c-label" x="512" y="424">build01</text><text class="c-addr" x="512" y="438">10.42.0.20</text></g>
-
-      <!-- title block, as on a chart -->
-      <g transform="translate(24 24)">
-        <rect width="150" height="58" fill="var(--water)" stroke="var(--ink)"/>
-        <text class="c-title" x="10" y="20">Example network</text>
-        <text class="c-addr" x="10" y="36">nebula.example.com</text>
-        <text class="c-addr" x="10" y="50">10.42.0.0/22</text>
-      </g>
-    </svg>
-    <figcaption>Every host checks in with the lighthouse (dotted), then opens tunnels straight to the hosts it talks to (dashed). Only the lighthouse needs a public address.</figcaption>
-  </figure>
-</div>
-
-<section>
-  <div class="wrap">
-    <h2>From nothing to a working network</h2>
-    <p class="intro">Set up the lighthouse once. After that, adding a host is two commands: one on the lighthouse, one on the host.</p>
-    <ol class="steps">
-      <li>
-        <p class="where">On a server with a public address</p>
-        <h3>Set up the lighthouse</h3>
-        <p>It installs nebula, creates the certificate authority, signs its own cert and starts the service.</p>
-<pre class="term"><i>$</i> <b>sudo nebctl lighthouse</b>
-Install the latest release now? [Y/n]:
-<i>…</i>
-Name for the CA: <b>Example.com</b>
-Nebula network: <b>10.42.0.0/22</b>
-Domain for Nebula host names
-  [nebula.example.com]:
-Host name for the cert: <b>lh</b>
-<i>…</i>
-Public IP or DNS name
-  [203.0.113.10]:
-Answer DNS for
-  *.nebula.example.com? [Y/n]:</pre>
+    <ol class="min-w-0 relative border-l border-edge ml-3 space-y-14">
+      <li class="pl-10 relative">
+        <span class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-ember ring-4 ring-night"></span>
+        <p class="text-sm text-dim">On a server with a public address</p>
+        <h3 class="mt-1 text-xl font-semibold text-white">Light the lighthouse</h3>
+        <p class="mt-2 text-star/80 leading-relaxed">nebctl installs Nebula, creates the certificate authority, signs the lighthouse's own cert and starts the service.</p>
+        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto"><span class="text-flare">$</span> sudo nebctl lighthouse
+<span class="text-dim">Nebula network:</span> 10.42.0.0/22
+<span class="text-dim">Domain for Nebula host names [nebula.example.com]:</span>
+<span class="text-dim">Answer DNS for *.nebula.example.com? [Y/n]:</span></pre>
       </li>
-      <li>
-        <p class="where">On the lighthouse</p>
-        <h3>Sign a cert for the new host</h3>
-        <p>It prints a bundle: the host's cert and key, the lighthouses and the domain, in one block of text.</p>
-<pre class="term"><i>$</i> <b>sudo nebctl ca sign</b>
-Host name for the cert (a short name
-  gets .nebula.example.com): <b>mac01</b>
-Nebula address [10.42.0.12/22]:
------BEGIN NEBCTL BUNDLE-----
-H4sIAAAAAAAC/+RXW4+iyhZ+5r8w7zuDY...
------END NEBCTL BUNDLE-----</pre>
+      <li class="pl-10 relative">
+        <span class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-flare ring-4 ring-night"></span>
+        <p class="text-sm text-dim">On the lighthouse</p>
+        <h3 class="mt-1 text-xl font-semibold text-white">Sign a cert for a machine</h3>
+        <p class="mt-2 text-star/80 leading-relaxed">It prints a bundle, one block of text with the machine's cert and key, the lighthouses and the domain.</p>
+        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto"><span class="text-flare">$</span> sudo nebctl ca sign
+<span class="text-dim">Host name for the cert:</span> mac01
+<span class="text-dim">-----BEGIN NEBCTL BUNDLE-----</span>
+<span class="text-dim">H4sIAAAAAAAC/+RXW4+iyhZ+5r8w7zuDY...</span></pre>
       </li>
-      <li>
-        <p class="where">On the new host</p>
-        <h3>Paste the bundle</h3>
-        <p>It installs the cert, writes a config that <code>nebula -test</code> has passed, sets up DNS and starts nebula at boot.</p>
-<pre class="term"><i>$</i> <b>sudo nebctl node</b>
-How should this host get its certificate?
-  1) Paste a bundle made on the CA host
-Choose [1]:
-Paste the bundle, from its BEGIN line
-  to its END line: <b>[paste]</b>
-Installed the cert for
-  mac01.nebula.example.com (10.42.0.12/22)
-<i>…</i>
-Look up *.nebula.example.com
-  through 10.42.0.1? [Y/n]:
-
-Try it: ping 10.42.0.1</pre>
+      <li class="pl-10 relative">
+        <span class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-indigo-400 ring-4 ring-night"></span>
+        <p class="text-sm text-dim">On the new machine</p>
+        <h3 class="mt-1 text-xl font-semibold text-white">Paste it in</h3>
+        <p class="mt-2 text-star/80 leading-relaxed">With Nebula Node on a Mac, or one command on Linux. The machine joins, gets its name and reconnects at every boot.</p>
+        <pre class="mt-4 font-mono text-[13px] leading-6 bg-deep border border-edge rounded-xl p-4 overflow-x-auto"><span class="text-flare">$</span> sudo nebctl node
+<span class="text-dim">Installed the cert for mac01.nebula.example.com</span>
+<span class="text-ember">Try it: ping 10.42.0.1</span></pre>
       </li>
     </ol>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap app">
-    <figure class="shot">
-      <img src="app.png" width="1240" height="558" alt="The Nebula Node window, showing a Mac set up as mac01.nebula.example.com at 10.42.0.12, checking in with the lighthouse 10.42.0.1, with ping, SSH and screen sharing open, and names under nebula.example.com looked up over Nebula.">
-    </figure>
-    <div>
-      <h2>Nebula Node, for the Mac</h2>
-      <p>The third step, in a window. Paste the bundle, check the lighthouses and what other hosts may reach, and Nebula Node installs nebula, writes the config and starts it at boot. macOS asks for an administrator's password when it changes anything.</p>
-      <ul>
-        <li>Would rather the private key never left this Mac? It makes a request for the lighthouse to sign instead.</li>
-        <li>Shows when the cert expires and whether nebula is running, with Start, Stop and Restart.</li>
-        <li>Runs the same nebctl as the command line, so both set up a Mac the same way.</li>
-      </ul>
-      <a class="btn primary" href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip">Download Nebula Node for Mac</a>
-      <p class="note">It isn't notarized by Apple yet. After moving it to Applications, run <code>xattr -cr "/Applications/Nebula Node.app"</code> once, or macOS refuses to open it.</p>
+  <!-- Mac app -->
+  <section class="relative">
+    <div class="absolute inset-0 -z-10 bg-[radial-gradient(50%_60%_at_30%_50%,rgba(99,102,241,.18),transparent_70%)]"></div>
+    <div class="max-w-6xl mx-auto px-5 sm:px-8 py-24 grid lg:grid-cols-[1.25fr_1fr] gap-14 items-center">
+      <img src="app.png" width="1240" height="558" alt="The Nebula Node window showing a Mac set up as mac01.nebula.example.com, checking in with the lighthouse 10.42.0.1." class="rounded-2xl ring-1 ring-white/10 shadow-[0_40px_100px_-30px_rgba(244,114,182,.45)]">
+      <div>
+        <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight">Nebula Node, the Mac app</h2>
+        <p class="mt-4 text-star/80 leading-relaxed">No Terminal needed on the Mac. Paste the bundle, check the lighthouses and what other machines may reach, and it does the rest. macOS asks for your password when it changes anything.</p>
+        <dl class="mt-8 space-y-5">
+          <div><dt class="font-semibold text-white">Your key, your Mac</dt><dd class="text-dim mt-1">It can make the key on the Mac and send only a request to be signed.</dd></div>
+          <div><dt class="font-semibold text-white">At a glance</dt><dd class="text-dim mt-1">The cert's expiry and whether Nebula is running, with Start, Stop and Restart.</dd></div>
+        </dl>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap">
-    <h2>What else it takes care of</h2>
-    <p class="intro">The parts of running Nebula that are easy to get wrong by hand.</p>
-    <dl class="more">
-      <div>
-        <dt>Names instead of addresses</dt>
-        <dd><code>ssh fe01.nebula.example.com</code> works from every host. The lighthouse answers for the network's own domain, and each host sends only that domain to it, so everyday lookups are untouched.</dd>
-      </div>
-      <div>
-        <dt>Keys that stay where they were made</dt>
-        <dd><code>sudo nebctl request</code> makes the key on the host and prints a request holding only the public half. The lighthouse signs it, and the private key never travels.</dd>
-      </div>
-      <div>
-        <dt>A checked install</dt>
-        <dd>nebula comes from the official <a href="https://github.com/slackhq/nebula/releases">slackhq/nebula releases</a> and is checked against their checksums. <code>sudo nebctl update</code> moves a host to a new release and restarts it.</dd>
-      </div>
-      <div>
-        <dt>A security review of the lighthouse</dt>
-        <dd>The lighthouse faces the internet. <code>sudo nebctl audit</code> reviews its firewall, open ports, SSH, updates, kernel settings and accounts, and gives the commands that fix each problem.</dd>
-      </div>
-      <div>
-        <dt>Renewals at the same address</dt>
-        <dd>Sign the same name again and the host keeps its address and groups. <code>nebctl status</code> warns 30 days before a cert expires.</dd>
-      </div>
-      <div>
-        <dt>A config tested before it's used</dt>
-        <dd>Every new config has to pass <code>nebula -test</code> before it replaces the old one, so a typo never takes a host off the network.</dd>
-      </div>
-    </dl>
-  </div>
-</section>
-
-<section id="download">
-  <div class="wrap">
-    <h2>Download</h2>
-    <p class="intro">Each release has a file per machine, plus <code>SHA256SUMS</code> to check it against. These links always point at the latest release.</p>
-    <div class="table-scroll">
-      <table class="files">
-        <thead><tr><th scope="col">Machine</th><th scope="col"><code>uname -m</code> says</th><th scope="col">File</th></tr></thead>
-        <tbody>
-          <tr><td>Mac, the app</td><td>either</td><td><a href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip">NebulaNode-macos.zip</a></td></tr>
-          <tr><td>Mac with Apple silicon</td><td><code>arm64</code></td><td><a href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-darwin-arm64">nebctl-darwin-arm64</a></td></tr>
-          <tr><td>Intel Mac</td><td><code>x86_64</code></td><td><a href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-darwin-amd64">nebctl-darwin-amd64</a></td></tr>
-          <tr><td>Linux, x86-64</td><td><code>x86_64</code></td><td><a href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64">nebctl-linux-amd64</a></td></tr>
-          <tr><td>Linux, ARM64</td><td><code>aarch64</code></td><td><a href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-arm64">nebctl-linux-arm64</a></td></tr>
-          <tr><td>Linux, ARMv5 to v7</td><td><code>armv7l</code>, <code>armv6l</code></td><td><a href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-arm">nebctl-linux-arm</a></td></tr>
-        </tbody>
-      </table>
+  <!-- Features -->
+  <section class="max-w-6xl mx-auto px-5 sm:px-8 py-24 border-t border-edge">
+    <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight max-w-2xl">The parts that are easy to get wrong, done right</h2>
+    <div class="mt-14 grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-edge rounded-2xl overflow-hidden ring-1 ring-edge">
+      <div class="bg-night p-7"><h3 class="font-semibold text-white">Names, not numbers</h3><p class="mt-2 text-dim text-[15px] leading-relaxed"><span class="font-mono text-star">ssh fe01.nebula.example.com</span>, from any machine on the network.</p></div>
+      <div class="bg-night p-7"><h3 class="font-semibold text-white">Keys that never travel</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">A machine can make its own key; the lighthouse signs only the public half.</p></div>
+      <div class="bg-night p-7"><h3 class="font-semibold text-white">Checked installs</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">Official Nebula releases, checked against their checksums. One command to update.</p></div>
+      <div class="bg-night p-7"><h3 class="font-semibold text-white">A lighthouse check-up</h3><p class="mt-2 text-dim text-[15px] leading-relaxed"><span class="font-mono text-star">nebctl audit</span> reviews the server facing the internet, with the fix for each finding.</p></div>
+      <div class="bg-night p-7"><h3 class="font-semibold text-white">Renewals that keep addresses</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">Sign the same name again to renew. A warning comes 30 days ahead.</p></div>
+      <div class="bg-night p-7"><h3 class="font-semibold text-white">Tested configs</h3><p class="mt-2 text-dim text-[15px] leading-relaxed">Every config passes <span class="font-mono text-star">nebula -test</span> before it's used.</p></div>
     </div>
-    <div class="dl-grid">
-      <div>
-        <h3>Install the command-line tool on Linux</h3>
-<pre class="term">curl -LO https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64
+  </section>
+
+  <!-- Download -->
+  <section id="download" class="max-w-6xl mx-auto px-5 sm:px-8 py-24 border-t border-edge">
+    <h2 class="text-3xl sm:text-4xl font-semibold text-white tracking-tight">Download</h2>
+    <p class="mt-4 text-dim">Always the latest release, each file checkable against <span class="font-mono">SHA256SUMS</span>.</p>
+    <div class="mt-12 grid md:grid-cols-[1fr_1.4fr] gap-6">
+      <a href="https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip" class="min-w-0 group rounded-2xl bg-gradient-to-br from-flare/20 to-indigo-500/10 ring-1 ring-flare/30 p-8 hover:ring-flare">
+        <h3 class="text-2xl font-semibold text-white">Nebula Node for Mac</h3>
+        <p class="mt-2 text-star/80">Apple silicon and Intel, macOS 14 or later.</p>
+        <span class="mt-8 inline-block rounded-full bg-ember text-night font-semibold px-5 py-2.5 group-hover:bg-white">Download</span>
+        <p class="mt-6 text-sm text-dim">Not notarized yet: run <span class="font-mono text-star break-all">xattr -cr "/Applications/Nebula Node.app"</span> once after installing.</p>
+      </a>
+      <div class="min-w-0 rounded-2xl bg-deep ring-1 ring-edge p-8">
+        <h3 class="text-2xl font-semibold text-white">Command-line tool</h3>
+        <div class="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64">Linux x86-64</a>
+          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-arm64">Linux ARM64</a>
+          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-arm">Linux ARMv5-7</a>
+          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-darwin-arm64">macOS Apple silicon</a>
+          <a class="rounded-lg ring-1 ring-edge px-3 py-2 hover:ring-ember" href="https://github.com/davewat/nebctl/releases/latest/download/nebctl-darwin-amd64">macOS Intel</a>
+        </div>
+        <pre class="mt-6 font-mono text-[12.5px] leading-6 bg-night border border-edge rounded-xl p-4 overflow-x-auto">curl -LO https://github.com/davewat/nebctl/releases/latest/download/nebctl-linux-amd64
 curl -LO https://github.com/davewat/nebctl/releases/latest/download/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
-sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl
-sudo nebctl</pre>
-      </div>
-      <div>
-        <h3>Install the Mac app</h3>
-<pre class="term">curl -LO https://github.com/davewat/nebctl/releases/latest/download/NebulaNode-macos.zip
-curl -LO https://github.com/davewat/nebctl/releases/latest/download/SHA256SUMS
-shasum -a 256 -c --ignore-missing SHA256SUMS
-ditto -x -k NebulaNode-macos.zip /Applications
-xattr -cr "/Applications/Nebula Node.app"</pre>
+sudo install -m 0755 nebctl-linux-amd64 /usr/local/bin/nebctl</pre>
       </div>
     </div>
-    <p class="fine" style="margin-top:1.5rem">Running the same commands again updates to the newest release. The <a href="https://github.com/davewat/nebctl#readme">README</a> walks through a lighthouse, Linux hosts and Macs question by question.</p>
-  </div>
-</section>
+  </section>
 </main>
 
-<footer>
-  <div class="wrap">
-    <p>nebctl is on <a href="https://github.com/davewat/nebctl">GitHub</a>, where you can report problems and read the code.</p>
-    <p>Nebula itself is <a href="https://github.com/slackhq/nebula">slackhq/nebula</a>. nebctl installs its official releases and isn't affiliated with the Nebula project.</p>
+<footer class="border-t border-edge">
+  <div class="max-w-6xl mx-auto px-5 sm:px-8 py-10 text-sm text-dim flex flex-col sm:flex-row gap-3 sm:justify-between">
+    <p>nebctl on <a class="text-star hover:text-white" href="https://github.com/davewat/nebctl">GitHub</a></p>
+    <p>Nebula is <a class="text-star hover:text-white" href="https://github.com/slackhq/nebula">slackhq/nebula</a>; nebctl isn't affiliated with it.</p>
   </div>
 </footer>
 
+<script>
+  // A lighthouse that pulses, and machines that check in with it and
+  // then link to each other. Still when reduced motion is asked for.
+  const c = document.getElementById('mesh'), g = c.getContext('2d');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W, H, dpr, stars = [], nodes = [], lh, t0 = performance.now();
+
+  function layout() {
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    W = c.clientWidth; H = c.clientHeight;
+    c.width = W * dpr; c.height = H * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const wide = W > 900;
+    lh = { x: W * (wide ? 0.76 : 0.72), y: H * (wide ? 0.42 : 0.2) };
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    stars = Array.from({ length: Math.round(W * H / 5000) }, () => ({ x: rnd() * W, y: rnd() * H, r: rnd() * 1.1 + 0.2, a: rnd() * 0.6 + 0.2 }));
+    const spots = wide
+      ? [[0.7, 0.14], [0.93, 0.2], [0.95, 0.62], [0.74, 0.8], [0.88, 0.88], [0.62, 0.64]]
+      : [[0.45, 0.08], [0.92, 0.1], [0.9, 0.34], [0.55, 0.32]];
+    nodes = spots.map(([x, y], i) => ({ x: x * W, y: y * H, delay: 600 + i * 350 }));
+  }
+
+  function draw(now) {
+    const t = reduce ? 1e9 : now - t0;
+    g.clearRect(0, 0, W, H);
+    for (const s of stars) { g.fillStyle = `rgba(201,211,242,${s.a})`; g.beginPath(); g.arc(s.x, s.y, s.r, 0, 7); g.fill(); }
+
+    // check-ins, then direct links between neighbours
+    nodes.forEach((n, i) => {
+      const k = Math.min(Math.max((t - n.delay) / 700, 0), 1);
+      if (k <= 0) return;
+      g.strokeStyle = `rgba(131,144,181,${0.35 * k})`; g.setLineDash([2, 5]); g.lineWidth = 1;
+      g.beginPath(); g.moveTo(lh.x, lh.y); g.lineTo(lh.x + (n.x - lh.x) * k, lh.y + (n.y - lh.y) * k); g.stroke();
+      const m = nodes[(i + 1) % nodes.length];
+      const k2 = Math.min(Math.max((t - n.delay - 1600) / 900, 0), 1);
+      if (k2 > 0) {
+        g.strokeStyle = `rgba(244,114,182,${0.55 * k2})`; g.setLineDash([]); g.lineWidth = 1.2;
+        g.beginPath(); g.moveTo(n.x, n.y); g.lineTo(n.x + (m.x - n.x) * k2, n.y + (m.y - n.y) * k2); g.stroke();
+      }
+      g.setLineDash([]);
+      g.fillStyle = `rgba(201,211,242,${k})`; g.beginPath(); g.arc(n.x, n.y, 3.2, 0, 7); g.fill();
+    });
+
+    // the lighthouse: a steady core and a slow pulse
+    const p = reduce ? 0.5 : (t / 2600) % 1;
+    g.strokeStyle = `rgba(253,186,116,${0.5 * (1 - p)})`; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(lh.x, lh.y, 8 + p * 70, 0, 7); g.stroke();
+    const glow = g.createRadialGradient(lh.x, lh.y, 0, lh.x, lh.y, 34);
+    glow.addColorStop(0, 'rgba(253,186,116,.55)'); glow.addColorStop(1, 'rgba(253,186,116,0)');
+    g.fillStyle = glow; g.beginPath(); g.arc(lh.x, lh.y, 34, 0, 7); g.fill();
+    g.fillStyle = '#FDBA74'; g.beginPath(); g.arc(lh.x, lh.y, 5, 0, 7); g.fill();
+
+    if (!reduce) requestAnimationFrame(draw);
+  }
+
+  layout(); addEventListener('resize', () => { layout(); if (reduce) draw(0); });
+  requestAnimationFrame(draw);
+</script>
 </body>
 </html>
