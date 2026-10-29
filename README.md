@@ -197,16 +197,21 @@ changes the Mac through the standard administrator password prompt.
    shasum -a 256 -c --ignore-missing SHA256SUMS
    ```
    ```bash
-   ditto -x -k NebulaNode-macos.zip /Applications
+   sudo ditto -x -k NebulaNode-macos.zip /Applications
    ```
-2. It is signed ad hoc, not notarized, so clear the download flag once (else
+2. Make it root's. The app runs its nebctl as root, so anyone who could
+   change a file in it could take over the Mac (`nebctl audit` checks this):
+   ```bash
+   sudo chown -R root:wheel "/Applications/Nebula Node.app"
+   ```
+3. It is signed ad hoc, not notarized, so clear the download flag once (else
    macOS says it can't check the app):
    ```bash
-   xattr -cr "/Applications/Nebula Node.app"
+   sudo xattr -cr "/Applications/Nebula Node.app"
    ```
-3. On the lighthouse, sign a cert for this Mac (`sudo nebctl ca sign`), or
+4. On the lighthouse, sign a cert for this Mac (`sudo nebctl ca sign`), or
    choose "Keep the private key here" in the app for a request instead.
-4. Open Nebula Node, click **Set Up This Mac as a Node**, and follow it.
+5. Open Nebula Node, click **Set Up This Mac as a Node**, and follow it.
    Each step matches the table in section 3.
 
 The window also shows the setup, cert expiry and service, with Start, Stop

@@ -164,23 +164,30 @@ func (a *auditor) cert(label string, c *pki.Cert, isCA bool) {
 func (a *auditor) files() {
 	in := a.in
 	type want struct {
-		path string
-		mask uint32 // permission bits that must be clear
-		fix  string // chmod mode
+		path   string
+		mask   uint32 // permission bits that must be clear
+		fix    string // chmod mode
+		bundle bool   // a whole .app: fix it recursively
 	}
 	cfg := in.ConfigDir
 	checks := []want{
-		{cfg, 0o022, "go-w"},
-		{filepath.Join(cfg, "config.yml"), 0o022, "go-w"},
-		{filepath.Join(cfg, "host.key"), 0o077, "600"},
-		{filepath.Join(cfg, "pending.key"), 0o077, "600"},
-		{filepath.Join(cfg, "ca"), 0o077, "700"},
-		{filepath.Join(cfg, "ca", "ca.key"), 0o077, "600"},
-		{filepath.Join(in.BinDir, "nebula"), 0o022, "go-w"},
-		{filepath.Join(in.BinDir, "nebula-cert"), 0o022, "go-w"},
+		{cfg, 0o022, "go-w", false},
+		{filepath.Join(cfg, "config.yml"), 0o022, "go-w", false},
+		{filepath.Join(cfg, "host.key"), 0o077, "600", false},
+		{filepath.Join(cfg, "pending.key"), 0o077, "600", false},
+		{filepath.Join(cfg, "ca"), 0o077, "700", false},
+		{filepath.Join(cfg, "ca", "ca.key"), 0o077, "600", false},
+		{filepath.Join(in.BinDir, "nebula"), 0o022, "go-w", false},
+		{filepath.Join(in.BinDir, "nebula-cert"), 0o022, "go-w", false},
 	}
 	if in.Self != "" {
-		checks = append(checks, want{in.Self, 0o022, "go-w"})
+		// nebctl inside an app (Nebula Node) runs as root, so the whole app
+		// must be root's: whoever can replace a file in it gets root.
+		if i := strings.Index(in.Self, ".app/Contents/"); i >= 0 {
+			checks = append(checks, want{in.Self[:i+4], 0o022, "go-w", true})
+		} else {
+			checks = append(checks, want{in.Self, 0o022, "go-w", false})
+		}
 	}
 	bad := 0
 	for _, c := range checks {
@@ -190,19 +197,35 @@ func (a *auditor) files() {
 		}
 		if f.UID > 0 {
 			bad++
-			a.add(Fail, c.path+" isn't owned by root",
-				"It runs as root or holds nebula's secrets, so whoever owns it can take over this machine or join your network.",
-				"sudo chown root "+c.path)
+			detail := "It runs as root or holds nebula's secrets, so whoever owns it can take over this machine or join your network."
+			fix := "sudo chown root " + shellQuote(c.path)
+			if c.bundle {
+				detail = "This app runs its nebctl as root, so whoever can change a file in it can take over this machine."
+				fix = "sudo chown -R root:wheel " + shellQuote(c.path)
+			}
+			a.add(Fail, c.path+" isn't owned by root", detail, fix)
 		}
 		if uint32(f.Mode.Perm())&c.mask != 0 {
 			bad++
-			a.add(Fail, fmt.Sprintf("%s is %s: others can %s it", c.path, f.Mode.Perm(), readOrWrite(c.mask)),
-				"", "sudo chmod "+c.fix+" "+c.path)
+			fix := "sudo chmod " + c.fix + " " + shellQuote(c.path)
+			if c.bundle {
+				fix = "sudo chmod -R go-w " + shellQuote(c.path)
+			}
+			a.add(Fail, fmt.Sprintf("%s is %s: others can %s it", c.path, f.Mode.Perm(), readOrWrite(c.mask)), "", fix)
 		}
 	}
 	if bad == 0 {
 		a.add(Pass, "Only root can read nebula's keys or change its config and binaries", "")
 	}
+}
+
+// shellQuote quotes a path for a copied fix command (paths like
+// "/Applications/Nebula Node.app" hold spaces).
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:=,@") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func readOrWrite(mask uint32) string {
@@ -229,7 +252,7 @@ func (a *auditor) caKey() {
 		a.add(Warn, "The CA key is on this internet-facing host, without a passphrase",
 			"Anyone who gets root here can sign certs that join your network as any host. Keep ca.key offline and copy it back here only to sign.",
 			"# copy "+p+" somewhere offline first (a password manager, an encrypted drive), then:",
-			"sudo shred -u "+p,
+			"sudo shred -u "+shellQuote(p),
 			"# to sign later, copy it back to "+p+" (chmod 600), sign, and remove it again")
 	default:
 		a.add(Info, "The CA key is here, without a passphrase",

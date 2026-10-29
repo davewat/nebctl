@@ -25,3 +25,11 @@ func TestUnitSetsNebulaDNS(t *testing.T) {
 		t.Errorf("unit without DNS has ExecStartPost:\n%s", u)
 	}
 }
+
+func TestLinuxState(t *testing.T) {
+	for in, want := range map[string]string{"active": "running", "inactive": "stopped", "failed": "failed", "activating": "starting"} {
+		if got := linuxState(in); got != want {
+			t.Errorf("linuxState(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

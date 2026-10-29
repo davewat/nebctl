@@ -519,6 +519,9 @@ func (c *console) runLocal(args []string) ([]byte, error) {
 	if c.a.noService {
 		global = append(global, "-no-service")
 	}
+	if c.a.repo != "" {
+		global = append(global, "-repo", c.a.repo)
+	}
 	cmd := exec.Command(exe, append(append(global, "app"), args...)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

@@ -129,7 +129,21 @@ func Status(goos string) string {
 		return "loaded"
 	}
 	out, _ := exec.Command("systemctl", "is-active", "nebula").Output()
-	return strings.TrimSpace(string(out)) + " (logs: journalctl -u nebula)"
+	return linuxState(strings.TrimSpace(string(out))) + " (logs: journalctl -u nebula)"
+}
+
+// linuxState puts systemd's words in the ones macOS's launchd uses, so
+// "running" means the same on both.
+func linuxState(s string) string {
+	switch s {
+	case "active", "reloading":
+		return "running"
+	case "inactive", "deactivating":
+		return "stopped"
+	case "activating":
+		return "starting"
+	}
+	return s // failed, unknown
 }
 
 func run(name string, args ...string) error {

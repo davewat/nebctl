@@ -31,11 +31,20 @@ export function HealthPage() {
 }
 
 function HealthInner() {
-  const { target, refreshState, toast } = useConsole();
+  const { target, state, refreshState, toast } = useConsole();
   const res = useResource(() => api.health(target.id), [target.id]);
   const h = res.data;
   const svc = useTask();
   const upd = useTask();
+  const adm = useTask();
+  const enableAdmin = async () => {
+    const r = await adm.run(() => api.enableAdmin(target.id));
+    if (r) {
+      toast('Admin access is on. Nebula restarted.');
+      refreshState();
+      await res.refresh();
+    }
+  };
   const [confirmUpdate, setConfirmUpdate] = useState(false);
   const [log, setLog] = useState<string | null>(null);
   const running = h?.service.startsWith('running');
@@ -73,11 +82,21 @@ function HealthInner() {
                     <dd><span className="mono">{h.latest}</span>{hasUpdate ? '' : <span className="dim">, you're up to date</span>}</dd>
                   </>
                 )}
+                {!h.latest && h.latestError && (
+                  <>
+                    <dt>Latest nebula</dt>
+                    <dd className="dim wrap-any">Couldn't check: {h.latestError}</dd>
+                  </>
+                )}
               </dl>
-              {hasUpdate && (
+              {(hasUpdate || (!h.latest && h.nebula)) && (
                 <div className="panel-foot">
-                  <Button variant="primary" busy={upd.busy} onClick={() => setConfirmUpdate(true)}>Update nebula</Button>
-                  <span className="dim">Downloads {h.latest}, checks it against the release checksums and restarts nebula.</span>
+                  <Button variant={hasUpdate ? 'primary' : undefined} busy={upd.busy} onClick={() => setConfirmUpdate(true)}>Update nebula</Button>
+                  <span className="dim">
+                    {hasUpdate
+                      ? `Downloads ${h.latest}, checks it against the release checksums and restarts nebula.`
+                      : 'Looks up the latest release again and installs it if it is newer, checked against its checksums.'}
+                  </span>
                 </div>
               )}
               <ErrorText>{upd.error}</ErrorText>
@@ -110,7 +129,20 @@ function HealthInner() {
                 </>
               )}
               <dt>Tunnels</dt>
-              <dd className="num">{h.tunnels} established, {h.pending} handshaking</dd>
+              {h.tunnels !== undefined ? (
+                <dd className="num">{h.tunnels} established, {h.pending ?? 0} handshaking</dd>
+              ) : (
+                <dd className="dim wrap-any">
+                  Can't count them: {h.adminError ?? "nebula's admin server didn't answer"}
+                  {state && !state.admin.enabled && (
+                    <>
+                      {' '}
+                      <Button small busy={adm.busy} onClick={() => void enableAdmin()}>Turn on admin access</Button>
+                    </>
+                  )}
+                  <ErrorText>{adm.error}</ErrorText>
+                </dd>
+              )}
             </dl>
           </Panel>
 
@@ -136,7 +168,7 @@ function HealthInner() {
 
       {confirmUpdate && h && (
         <Dialog
-          title={`Update nebula to ${h.latest}?`}
+          title={h.latest ? `Update nebula to ${h.latest}?` : 'Update nebula to the latest release?'}
           busy={upd.busy}
           onClose={() => setConfirmUpdate(false)}
           footer={
@@ -147,7 +179,7 @@ function HealthInner() {
                 if (r) {
                   setConfirmUpdate(false);
                   setLog(r.log);
-                  toast(`Updated nebula to ${h.latest}.`);
+                  toast(h.latest ? `Updated nebula to ${h.latest}.` : 'Nebula is up to date.');
                   await res.refresh();
                   refreshState();
                 }
@@ -155,7 +187,7 @@ function HealthInner() {
             </>
           }
         >
-          <p>Nebula restarts, so its tunnels drop for a few seconds and reconnect on their own. You have {h.nebula}.</p>
+          <p>If there's a newer release, nebula restarts on it, so its tunnels drop for a few seconds and reconnect on their own. You have {h.nebula}.</p>
           <ErrorText>{upd.error}</ErrorText>
         </Dialog>
       )}

@@ -319,6 +319,17 @@ func TestMacChecksNebulaOnly(t *testing.T) {
 	none(t, fs, "ufw")
 }
 
+func TestAppBundleOwnership(t *testing.T) {
+	f, in := hs01()
+	in.GOOS = "darwin"
+	in.Self = "/Applications/Nebula Node.app/Contents/Resources/nebctl"
+	f.stats["/Applications/Nebula Node.app"] = File{Mode: 0o755, UID: 501}
+	fs := Run(in)
+	got := level(t, fs, "/Applications/Nebula Node.app isn't owned by root", Fail)
+	fixHas(t, got, `sudo chown -R root:wheel '/Applications/Nebula Node.app'`)
+	none(t, fs, "Resources/nebctl isn't owned")
+}
+
 func TestUFWRuleMatching(t *testing.T) {
 	cases := []struct {
 		to    string

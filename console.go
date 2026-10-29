@@ -128,6 +128,9 @@ func (a *app) consoleCmd(name string, args []string) (ok bool, err error) {
 			cmd += " -address " + *address
 		}
 		msg, err := c.Message(cmd + " " + arg)
+		if err != nil && name == "create-tunnel" && strings.HasPrefix(err.Error(), "Tunnel already") {
+			msg, err = err.Error(), nil // nebula 1.12 exits 1 for these; they're answers, not failures
+		}
 		if err != nil {
 			return true, err
 		}
@@ -740,8 +743,45 @@ func splitLines(s string) []string {
 
 // Health
 
+// latestNebula is nebula's newest release, cached for 6 hours so a slow or
+// offline moment doesn't hold up the console; a stale answer beats none.
+func (a *app) latestNebula(timeout time.Duration) (string, error) {
+	type cached struct {
+		Repo    string    `json:"repo"`
+		Version string    `json:"version"`
+		Checked time.Time `json:"checked"`
+	}
+	path := filepath.Join(a.cfgDir(), "admin", "latest-nebula.json")
+	var c cached
+	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &c) == nil && c.Repo == a.repo {
+		if c.Version != "" && time.Since(c.Checked) < 6*time.Hour {
+			return c.Version, nil
+		}
+	} else {
+		c = cached{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rel, err := release.Get(ctx, a.http, a.repo, "")
+	if err != nil {
+		if c.Version != "" {
+			return c.Version, nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "", fmt.Errorf("GitHub didn't answer within %s", timeout)
+		}
+		return "", err
+	}
+	if data, err := json.Marshal(cached{a.repo, rel.Version(), time.Now().UTC()}); err == nil {
+		if os.MkdirAll(filepath.Dir(path), 0o700) == nil {
+			os.WriteFile(path, data, 0o600) // only root can; others just don't cache
+		}
+	}
+	return rel.Version(), nil
+}
+
 func (a *app) consoleHealth() error {
-	out := map[string]any{"nebctl": version, "service": "not managed (test root)", "tunnels": 0, "pending": 0}
+	out := map[string]any{"nebctl": version, "service": "not managed (test root)"}
 	if v := release.InstalledVersion(a.nebulaBin()); v != "" {
 		out["nebula"] = v
 	}
@@ -756,13 +796,23 @@ func (a *app) consoleHealth() error {
 			out["ca"] = map[string]any{"name": cas[0].Name, "days_left": daysLeft(cas[0].NotAfter)}
 		}
 	}
+	if latest, err := a.latestNebula(12 * time.Second); err == nil {
+		out["latest"] = latest
+	} else {
+		out["latest_error"] = err.Error()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if rel, err := release.Get(ctx, a.http, a.repo, ""); err == nil {
-		out["latest"] = rel.Version()
-	}
-	if c, h, err := a.adminClient(); err == nil {
-		if peers, err := c.Peers(); err == nil {
+	// Tunnel counts come from nebula's admin server; without it, say why
+	// rather than show zero.
+	c, h, err := a.adminClient()
+	if err != nil {
+		out["admin_error"] = err.Error()
+	} else {
+		peers, err := c.Peers()
+		if err != nil {
+			out["admin_error"] = err.Error()
+		} else {
 			t, p := 0, 0
 			for _, pe := range peers {
 				if pe.Pending {

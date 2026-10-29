@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -54,13 +53,11 @@ func (a *app) audit(asJSON, offline bool) error {
 		}
 	}
 	if !offline && in.Nebula != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		rel, err := release.Get(ctx, a.http, a.repo, "")
-		cancel()
+		latest, err := a.latestNebula(15 * time.Second)
 		if err != nil {
 			in.LatestErr = err.Error()
 		} else {
-			in.Latest = rel.Version()
+			in.Latest = latest
 		}
 	}
 

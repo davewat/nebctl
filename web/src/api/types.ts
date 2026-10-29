@@ -184,12 +184,16 @@ export interface Health {
   nebctl: string;
   nebula?: string;
   latest?: string;
+  /** Why the latest release couldn't be looked up. */
+  latestError?: string;
   service: string;
   cert?: CertInfo;
   ca?: { name: string; daysLeft: number };
   metrics?: Record<string, number>;
-  tunnels: number;
-  pending: number;
+  /** Missing when nebula's admin server can't be read (adminError says why). */
+  tunnels?: number;
+  pending?: number;
+  adminError?: string;
 }
 
 export type FindingLevel = 'pass' | 'info' | 'warn' | 'fail';

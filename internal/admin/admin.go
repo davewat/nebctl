@@ -142,11 +142,20 @@ func (c Client) Run(command string) (string, error) {
 	var out, errb bytes.Buffer
 	s.Stdout, s.Stderr = &out, &errb
 	err = s.Run(command)
+	text := strings.TrimSpace(out.String() + errb.String())
+	// Up to 1.11 nebula sends no exit status; from 1.12 a failed command
+	// exits 1, and what it printed is the reason.
 	var missing *ssh.ExitMissingError
-	if err != nil && !errors.As(err, &missing) {
+	var exit *ssh.ExitError
+	switch {
+	case errors.As(err, &exit):
+		if text == "" {
+			return "", err
+		}
+		return "", errors.New(text)
+	case err != nil && !errors.As(err, &missing):
 		return "", err
 	}
-	text := strings.TrimSpace(out.String() + errb.String())
 	if strings.HasPrefix(text, "did not understand") {
 		return "", fmt.Errorf("nebula doesn't know %q", command)
 	}
