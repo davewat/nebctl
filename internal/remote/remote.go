@@ -381,12 +381,15 @@ func (c *Conn) sudo(cmd string, input []byte) (stdout, stderr []byte, err error)
 
 // App runs `nebctl app <args>` as root there and returns its stdout. A
 // failure carries nebctl's own message.
-func (c *Conn) App(args []string) ([]byte, error) {
+func (c *Conn) App(args []string) ([]byte, error) { return c.AppInput(args, nil) }
+
+// AppInput is App with input on nebctl's stdin (after sudo's password line).
+func (c *Conn) AppInput(args []string, input []byte) ([]byte, error) {
 	quoted := make([]string, len(args))
 	for i, a := range args {
 		quoted[i] = Quote(a)
 	}
-	out, errb, err := c.sudo(Quote(c.Nebctl)+" app "+strings.Join(quoted, " "), nil)
+	out, errb, err := c.sudo(Quote(c.Nebctl)+" app "+strings.Join(quoted, " "), input)
 	if err != nil {
 		msg := strings.TrimSpace(string(errb))
 		msg = strings.TrimPrefix(msg, "error: ")

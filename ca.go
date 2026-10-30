@@ -329,6 +329,14 @@ func (a *app) askHostCert(network *netconf.Network, defName, defIP string) (cert
 func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string) (pki.Cert, string, error) {
 	name, ip, groups := r.name, r.ip, r.groups
 	crt := filepath.Join(a.issuedDir(), name+".crt")
+	opts := pki.SignOptions{
+		CACrt: a.caDirCrt(), Name: name,
+		Networks: []string{ip.String()}, Groups: groups,
+		InPub: pubPath, OutCrt: crt, OutKey: keyPath,
+	}
+	if err := a.caKeyFor(&opts); err != nil {
+		return pki.Cert{}, "", err
+	}
 	if err := os.MkdirAll(a.issuedDir(), 0o700); err != nil {
 		return pki.Cert{}, "", err
 	}
@@ -337,11 +345,7 @@ func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string
 	if keyPath != "" {
 		os.Remove(keyPath)
 	}
-	if err := a.tool().Sign(pki.SignOptions{
-		CACrt: a.caDirCrt(), CAKey: a.caDirKey(), Name: name,
-		Networks: []string{ip.String()}, Groups: groups,
-		InPub: pubPath, OutCrt: crt, OutKey: keyPath,
-	}); err != nil {
+	if err := a.tool().Sign(opts); err != nil {
 		return pki.Cert{}, "", err
 	}
 	if keyPath != "" {

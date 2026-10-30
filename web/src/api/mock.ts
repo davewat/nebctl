@@ -125,6 +125,28 @@ interface Db {
   latest: string;
 }
 
+// The mock lighthouse's CA key. Pasting it back is what proves a copy works.
+const MOCK_CA_KEY = '-----BEGIN NEBULA ED25519 PRIVATE KEY-----\nm0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3dKeyM0ck3d==\n-----END NEBULA ED25519 PRIVATE KEY-----\n';
+const CA_KEY_TTL_MS = 15 * 60 * 1000;
+
+function checkPastedKey(db: Db, b: Record<string, unknown>) {
+  const key = String(b.key ?? '').trim();
+  if (!/^-----BEGIN NEBULA [A-Z0-9 ]*PRIVATE KEY-----/.test(key)) {
+    throw new ApiError(400, "that isn't a Nebula CA key: paste everything from -----BEGIN NEBULA ... PRIVATE KEY----- to the END line");
+  }
+  if (key !== MOCK_CA_KEY.trim()) throw new ApiError(400, "that key isn't this CA's key");
+  db.certs!.caKeyHeldUntil = new Date(Date.now() + CA_KEY_TTL_MS).toISOString();
+}
+
+function spendCaKey(db: Db) {
+  const c = db.certs!;
+  if (c.caKeyHeldUntil && Date.parse(c.caKeyHeldUntil) < Date.now()) delete c.caKeyHeldUntil;
+  if (c.caKey === 'offline' && !c.caKeyHeldUntil) {
+    throw new ApiError(400, "the CA key isn't on this machine: paste it on the console's Certificates page (or sign in a terminal, which asks for it)");
+  }
+  if (c.caKeyHeldUntil) c.caKeyHeldUntil = new Date(Date.now() + CA_KEY_TTL_MS).toISOString();
+}
+
 const RULES: Rule[] = [
   { proto: 'icmp', port: 'any' },
   { proto: 'tcp', port: '22' },
@@ -248,6 +270,8 @@ function buildCerts(db: Db): Certificates {
     lighthouses: [LH_ENTRY],
     issued: HOSTS.map((h) => issuedFrom(h, db.settings.blocklist, h.mode !== 'pending' && !h.revoked && h !== db.me)),
     blocklist: [...db.settings.blocklist],
+    caKey: 'here',
+    caKeyEncrypted: false,
   };
 }
 
@@ -590,6 +614,7 @@ const routes: Array<[string, RegExp, Handler, number?]> = [
   ['GET', /^certs$/, (db) => {
     if (!db.certs) throw new ApiError(400, 'The CA is not on this machine. Switch to the lighthouse to manage certificates.');
     const c = db.certs;
+    if (c.caKeyHeldUntil && Date.parse(c.caKeyHeldUntil) < Date.now()) delete c.caKeyHeldUntil;
     const online = new Set(db.peers.filter((p) => !p.pending).map((p) => p.vpnAddr));
     c.issued.forEach((i) => {
       i.daysLeft = daysLeft(i.notAfter);
@@ -605,6 +630,7 @@ const routes: Array<[string, RegExp, Handler, number?]> = [
   ['POST', /^certs$/, (db, _m, b) => {
     if (!db.certs) throw new ApiError(400, 'The CA is not on this machine.');
     if (!String(b.name ?? '').trim()) throw new ApiError(400, 'Enter a name for the host.');
+    spendCaKey(db);
     return signCert(db, String(b.name), b.ip as string | undefined, b.groups as string[] | undefined, true);
   }, 600],
   ['POST', /^certs\/request$/, (db, _m, b) => {
@@ -612,6 +638,7 @@ const routes: Array<[string, RegExp, Handler, number?]> = [
     if (!/BEGIN NEBCTL REQUEST/.test(String(b.request ?? ''))) {
       throw new ApiError(400, 'That isn\'t a nebctl request. Paste everything from -----BEGIN NEBCTL REQUEST----- to the END line.');
     }
+    spendCaKey(db);
     return signCert(db, String(b.name || 'requested-host'), b.ip as string | undefined, b.groups as string[] | undefined, false);
   }, 600],
   ['POST', /^certs\/revoke$/, (db, _m, b) => {
@@ -625,6 +652,31 @@ const routes: Array<[string, RegExp, Handler, number?]> = [
     db.peers = db.peers.filter((p) => p.fingerprint !== f);
     return { blocklist: [...db.certs.blocklist], log: `Added ${f.slice(0, 12)}… to pki.blocklist in /etc/nebula/config.yml\nnebula -test: ok\nReloaded nebula (SIGHUP).` };
   }, 700],
+  ['POST', /^ca-key\/check$/, (db, _m, b) => {
+    if (!db.certs) throw new ApiError(400, 'The CA is not on this machine.');
+    checkPastedKey(db, b);
+    return { message: "That is this CA's key", log: '', caKeyHeldUntil: db.certs.caKeyHeldUntil };
+  }, 500],
+  ['GET', /^ca-key\/file$/, (db) => {
+    if (db.certs?.caKey !== 'here') throw new ApiError(400, "the CA key isn't on this machine");
+    return { key: MOCK_CA_KEY, encrypted: false };
+  }],
+  ['POST', /^ca-key\/remove$/, (db, _m, b) => {
+    if (db.certs?.caKey !== 'here') throw new ApiError(400, "the CA key isn't on this machine");
+    try {
+      checkPastedKey(db, b);
+    } catch (e) {
+      throw new ApiError(400, `your copy didn't work, so the key was kept: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    db.certs.caKey = 'offline';
+    delete db.certs.caKeyEncrypted;
+    return { message: 'The CA key is off this machine. Paste it here when you sign.', log: 'Removed /etc/nebula/ca/ca.key.', caKeyHeldUntil: db.certs.caKeyHeldUntil };
+  }, 700],
+  ['DELETE', /^ca-key$/, (db) => {
+    if (!db.certs?.caKeyHeldUntil) throw new ApiError(404, 'no CA key is held for that machine');
+    delete db.certs.caKeyHeldUntil;
+    return { message: 'The console forgot the CA key' };
+  }],
   ['PUT', /^blocklist$/, (db, _m, b) => {
     if (db.target.id === 'fe01') throw new ApiError(502, `Couldn't reach ${db.target.host} over SSH: connection timed out. The blocklist was not changed there.`);
     const list = (b.fingerprints as string[]) ?? [];

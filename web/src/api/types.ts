@@ -143,6 +143,16 @@ export interface Certificates {
   lighthouses: Lighthouse[];
   issued: IssuedCert[];
   blocklist: string[];
+  /** Where the CA key is: in ca.key on the machine, or kept offline. */
+  caKey: 'here' | 'offline';
+  caKeyEncrypted?: boolean;
+  /** Set while the console holds a pasted key for this machine (in memory only). */
+  caKeyHeldUntil?: string;
+}
+
+export interface CaKeyPaste {
+  key: string;
+  passphrase?: string;
 }
 
 export interface Signed {

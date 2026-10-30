@@ -31,11 +31,13 @@ if [ $need = 1 ]; then read -r pw; [ "$pw" = sudopw ] || { echo "Sorry, try agai
 exec "$@"
 `
 
-// fakeNebctl answers -version, and echoes `app` arguments one per line.
+// fakeNebctl answers -version, and echoes `app` arguments one per line,
+// then its stdin when it was given -ca-key-stdin.
 const fakeNebctl = `#!/bin/sh
 [ "$1" = -version ] && { echo "nebctl v9.9.9"; exit 0; }
 shift
 for a in "$@"; do printf '%s\n' "$a"; done
+case " $* " in *" -ca-key-stdin "*) echo stdin:; cat;; esac
 `
 
 // server is an SSH server that runs exec requests with sh, as the test's
@@ -210,6 +212,15 @@ func TestDialTrustAuthSudoAndRun(t *testing.T) {
 	}
 	if got := strings.Split(strings.TrimSpace(string(out)), "\n"); strings.Join(got, "|") != "sign|-name|it's a host|-groups|a,b" {
 		t.Errorf("arguments arrived as %q", got)
+	}
+
+	// A CA key goes on stdin after sudo's password line, never in the arguments.
+	out, err = c.AppInput([]string{"sign", "-ca-key-stdin"}, []byte(`{"key":"KEY"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "sign\n-ca-key-stdin\nstdin:\n{\"key\":\"KEY\"}" {
+		t.Errorf("with input, nebctl got %q", got)
 	}
 
 	if v, err := c.FindNebctl(); err != nil || v != "" {

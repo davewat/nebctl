@@ -115,6 +115,11 @@ To update nebctl itself, repeat the `curl` and `install` lines from step 2.
   cert, the console offers to push the list to the machines it's connected to.
 - **Back up** `/etc/nebula/ca/ca.key` on the lighthouse. Every cert expires with
   the CA (5 years by default).
+- **Keep the CA key offline.** On the console's Certificates page, **Take it off
+  this machine** shows the key to save, checks your copy, then removes
+  `ca.key`. After that, paste the key when you sign: the console holds it in
+  memory for 15 minutes and never writes it to disk. `sudo nebctl ca sign` asks
+  for it too.
 
 ## Where things go
 

@@ -26,9 +26,10 @@ type Tool struct {
 
 // run passes the terminal through (an encrypted CA key asks for its
 // passphrase) and keeps stderr for the error.
-func (t Tool) run(args ...string) error {
+func (t Tool) run(args ...string) error { return t.runCmd(exec.Command(t.Bin, args...), args[0]) }
+
+func (t Tool) runCmd(cmd *exec.Cmd, name string) error {
 	var stderr bytes.Buffer
-	cmd := exec.Command(t.Bin, args...)
 	cmd.Stdin = t.Stdin
 	cmd.Stdout = t.Stdout
 	cmd.Stderr = &stderr
@@ -40,7 +41,7 @@ func (t Tool) run(args ...string) error {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("nebula-cert %s: %s", args[0], msg)
+		return fmt.Errorf("nebula-cert %s: %s", name, msg)
 	}
 	return nil
 }
@@ -70,26 +71,64 @@ func (t Tool) CreateCA(o CAOptions) error {
 
 type SignOptions struct {
 	CACrt, CAKey string
-	Name         string
-	Networks     []string
-	Groups       []string
-	InPub        string // sign this public key; otherwise a key is written to OutKey
-	OutCrt       string
-	OutKey       string
+	// CAKeyPEM, when set, is the CA key itself, handed to nebula-cert through
+	// a pipe so it is never written to a file. Passphrase opens an encrypted
+	// one; without it nebula-cert asks on the terminal.
+	CAKeyPEM   []byte
+	Passphrase string
+	Duration   time.Duration
+	Name       string
+	Networks   []string
+	Groups     []string
+	InPub      string // sign this public key; otherwise a key is written to OutKey
+	OutCrt     string
+	OutKey     string
 }
 
 func (t Tool) Sign(o SignOptions) error {
-	args := []string{"sign", "-ca-crt", o.CACrt, "-ca-key", o.CAKey,
+	key := o.CAKey
+	if o.CAKeyPEM != nil {
+		key = "/dev/fd/3" // ExtraFiles[0]
+	}
+	args := []string{"sign", "-ca-crt", o.CACrt, "-ca-key", key,
 		"-name", o.Name, "-networks", strings.Join(o.Networks, ","), "-out-crt", o.OutCrt}
 	if len(o.Groups) > 0 {
 		args = append(args, "-groups", strings.Join(o.Groups, ","))
+	}
+	if o.Duration > 0 {
+		args = append(args, "-duration", o.Duration.String())
 	}
 	if o.InPub != "" {
 		args = append(args, "-in-pub", o.InPub)
 	} else {
 		args = append(args, "-out-key", o.OutKey)
 	}
-	return t.run(args...)
+	cmd := exec.Command(t.Bin, args...)
+	if o.CAKeyPEM == nil {
+		return t.runCmd(cmd, "sign")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	// A key is far smaller than a pipe's buffer, so this never blocks.
+	_, err = w.Write(o.CAKeyPEM)
+	w.Close()
+	if err != nil {
+		return err
+	}
+	cmd.ExtraFiles = []*os.File{r}
+	if o.Passphrase != "" {
+		cmd.Env = append(os.Environ(), "NEBULA_CA_PASSPHRASE="+o.Passphrase)
+	}
+	return t.runCmd(cmd, "sign")
+}
+
+// IsEncryptedKey reports whether keyPEM is a passphrase-protected key.
+func IsEncryptedKey(keyPEM []byte) bool {
+	block, _ := pem.Decode(keyPEM)
+	return block != nil && strings.Contains(block.Type, "ENCRYPTED")
 }
 
 func (t Tool) Keygen(outKey, outPub string) error {

@@ -29,8 +29,10 @@ import (
 )
 
 // The web console's commands: `nebctl app <command>`, JSON out, inputs as
-// flags (never stdin), so the console runs them the same way here and on a
-// lighthouse over SSH. Messages nebctl would print go into a "log" field.
+// flags, so the console runs them the same way here and on a lighthouse over
+// SSH. The one exception is a CA key (-ca-key-stdin): it comes on stdin, so
+// it never shows in a process list or sudo's log. Messages nebctl would
+// print go into a "log" field.
 
 func (a *app) adminKeys() admin.Keys { return admin.Keys{Dir: filepath.Join(a.cfgDir(), "admin")} }
 
@@ -53,6 +55,7 @@ var consoleCommands = []string{
 	"connections", "tunnel", "close-tunnel", "create-tunnel", "change-remote", "lookup", "log-level",
 	"reload", "admin-enable", "certs", "next-ip", "sign", "sign-request", "revoke", "blocklist",
 	"settings", "configure", "logs", "siem", "siem-test", "health", "audit", "update", "service",
+	"ca-key-check", "ca-key-show", "ca-key-remove",
 }
 
 // consoleCmd runs one console command. ok is false for a name it doesn't know.
@@ -62,6 +65,7 @@ func (a *app) consoleCmd(name string, args []string) (ok bool, err error) {
 	}
 	var log bytes.Buffer
 	a.p = prompt.New(strings.NewReader(""), &log)
+	a.console = true
 	withLog := func(v map[string]any, err error) error {
 		if err != nil {
 			if s := strings.TrimSpace(log.String()); s != "" {
@@ -87,8 +91,14 @@ func (a *app) consoleCmd(name string, args []string) (ok bool, err error) {
 	set := fs.String("set", "", "blocklist: the whole list, comma separated")
 	jsonIn := fs.String("json", "", "configure, siem: the change as JSON")
 	lines := fs.Int("lines", 200, "logs: how many lines")
+	caKeyStdin := fs.Bool("ca-key-stdin", false, `sign, ca-key-*: read {"key","passphrase"} from stdin`)
 	if err := fs.Parse(args); err != nil {
 		return true, err
+	}
+	if *caKeyStdin {
+		if err := a.readCAKey(os.Stdin); err != nil {
+			return true, err
+		}
 	}
 	arg := fs.Arg(0)
 	groupsGiven := false
@@ -179,6 +189,14 @@ func (a *app) consoleCmd(name string, args []string) (ok bool, err error) {
 		return true, printJSON(map[string]string{"ip": next})
 	case "sign", "sign-request":
 		v, err := a.consoleSign(*certName, *ip, splitList(*groups), groupsGiven, *request, name == "sign-request")
+		return true, withLog(v, err)
+	case "ca-key-check":
+		v, err := a.consoleCAKeyCheck()
+		return true, withLog(v, err)
+	case "ca-key-show":
+		return true, a.consoleCAKeyShow()
+	case "ca-key-remove":
+		v, err := a.consoleCAKeyRemove()
 		return true, withLog(v, err)
 	case "revoke":
 		v, err := a.consoleRevoke(*fingerprint)
@@ -349,6 +367,11 @@ func (a *app) consoleCerts() error {
 			"fingerprint": ca.Fingerprint},
 		"cidr": network.CIDR, "domain": network.Domain,
 		"lighthouses": nonNilList(network.Lighthouses), "blocklist": nonNilList(h.Blocklist),
+		"ca_key": "offline",
+	}
+	if data, err := os.ReadFile(a.caDirKey()); err == nil {
+		out["ca_key"] = "here"
+		out["ca_key_encrypted"] = pki.IsEncryptedKey(data)
 	}
 	issued := make([]issuedOut, len(network.Issued))
 	for i, is := range network.Issued {

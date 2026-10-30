@@ -47,6 +47,7 @@ type console struct {
 	tokens   map[string]bool      // one-time link tokens not used yet
 	sessions map[string]time.Time // session id -> last use
 	targets  map[string]*sshTarget
+	caKeys   map[string]*heldKey // target id -> a CA key pasted for it
 	nextID   int
 	mux      *http.ServeMux
 	stop     context.CancelFunc
@@ -81,7 +82,7 @@ func (a *app) webCmd(args []string) error {
 		return err
 	}
 	c := &console{a: a, port: ln.Addr().(*net.TCPAddr).Port, tokens: map[string]bool{},
-		sessions: map[string]time.Time{}, targets: map[string]*sshTarget{}}
+		sessions: map[string]time.Time{}, targets: map[string]*sshTarget{}, caKeys: map[string]*heldKey{}}
 	c.routes()
 	link := c.link()
 	if *urlFile != "" {
@@ -318,15 +319,17 @@ func (c *console) routes() {
 		go func() { time.Sleep(200 * time.Millisecond); c.stop() }()
 	})
 
-	// app runs `nebctl app <args>` on the target, args built from the request.
-	app := func(pattern string, args func(r *http.Request) ([]string, error)) {
+	// call runs `nebctl app <args>` on the target, args (and any stdin)
+	// built from the request; after, if set, adds to a successful answer.
+	call := func(pattern string, build func(r *http.Request) (appCall, error), after func(r *http.Request, v map[string]any)) {
 		m.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			a, err := args(r)
+			ac, err := build(r)
 			if err != nil {
 				writeErr(w, http.StatusBadRequest, err)
 				return
 			}
-			out, err := c.run(r.PathValue("t"), a)
+			out, err := c.runIn(r.PathValue("t"), ac.args, ac.input)
+			clear(ac.input)
 			if err != nil {
 				writeErr(w, http.StatusBadRequest, err)
 				return
@@ -338,8 +341,23 @@ func (c *console) routes() {
 				writeErr(w, http.StatusBadGateway, fmt.Errorf("nebctl answered something that isn't JSON: %.200s", out))
 				return
 			}
-			writeJSON(w, http.StatusOK, rekey(v, camel, false))
+			v = rekey(v, camel, false)
+			if obj, ok := v.(map[string]any); ok {
+				if after != nil {
+					after(r, obj)
+				}
+				if ac.onOK != nil {
+					ac.onOK(obj)
+				}
+			}
+			writeJSON(w, http.StatusOK, v)
 		})
+	}
+	app := func(pattern string, args func(r *http.Request) ([]string, error)) {
+		call(pattern, func(r *http.Request) (appCall, error) {
+			a, err := args(r)
+			return appCall{args: a}, err
+		}, nil)
 	}
 	fixed := func(a ...string) func(*http.Request) ([]string, error) {
 		return func(*http.Request) ([]string, error) { return a, nil }
@@ -411,10 +429,15 @@ func (c *console) routes() {
 	})
 	app("POST /api/t/{t}/reload", fixed("reload"))
 
-	app("GET /api/t/{t}/certs", fixed("certs"))
+	call("GET /api/t/{t}/certs", func(*http.Request) (appCall, error) { return appCall{args: []string{"certs"}}, nil },
+		func(r *http.Request, v map[string]any) {
+			if until, ok := c.keyHeldUntil(r.PathValue("t")); ok {
+				v["caKeyHeldUntil"] = until
+			}
+		})
 	app("GET /api/t/{t}/certs/next-ip", fixed("next-ip"))
-	signArgs := func(cmd string) func(r *http.Request) ([]string, error) {
-		return func(r *http.Request) ([]string, error) {
+	signArgs := func(cmd string) func(r *http.Request) (appCall, error) {
+		return func(r *http.Request) (appCall, error) {
 			var in struct {
 				Name    string    `json:"name"`
 				IP      string    `json:"ip"`
@@ -422,7 +445,7 @@ func (c *console) routes() {
 				Request string    `json:"request"`
 			}
 			if err := body(r, &in); err != nil {
-				return nil, err
+				return appCall{}, err
 			}
 			args := []string{cmd}
 			if in.Name != "" {
@@ -437,11 +460,17 @@ func (c *console) routes() {
 			if cmd == "sign-request" {
 				args = append(args, "-request", in.Request)
 			}
-			return args, nil
+			// A pasted CA key goes along on stdin.
+			input := c.useKey(r.PathValue("t"))
+			if input != nil {
+				args = append(args, "-ca-key-stdin")
+			}
+			return appCall{args: args, input: input}, nil
 		}
 	}
-	app("POST /api/t/{t}/certs", signArgs("sign"))
-	app("POST /api/t/{t}/certs/request", signArgs("sign-request"))
+	call("POST /api/t/{t}/certs", signArgs("sign"), nil)
+	call("POST /api/t/{t}/certs/request", signArgs("sign-request"), nil)
+	c.caKeyRoutes(m, call)
 	app("POST /api/t/{t}/certs/revoke", func(r *http.Request) ([]string, error) {
 		var in struct {
 			Fingerprint string `json:"fingerprint"`
@@ -493,10 +522,18 @@ func (c *console) routes() {
 	c.mux = m
 }
 
+type appCall struct {
+	args  []string
+	input []byte                 // stdin, for a CA key
+	onOK  func(v map[string]any) // after it succeeds
+}
+
 // run runs `nebctl app <args>` on a target.
-func (c *console) run(id string, args []string) ([]byte, error) {
+func (c *console) run(id string, args []string) ([]byte, error) { return c.runIn(id, args, nil) }
+
+func (c *console) runIn(id string, args []string, input []byte) ([]byte, error) {
 	if id == "local" {
-		return c.runLocal(args)
+		return c.runLocal(args, input)
 	}
 	c.mu.Lock()
 	t := c.targets[id]
@@ -504,10 +541,10 @@ func (c *console) run(id string, args []string) ([]byte, error) {
 	if t == nil {
 		return nil, &apiError{http.StatusNotFound, map[string]any{"error": "that machine isn't connected any more: connect to it again"}}
 	}
-	return t.conn.App(args)
+	return t.conn.AppInput(args, input)
 }
 
-func (c *console) runLocal(args []string) ([]byte, error) {
+func (c *console) runLocal(args []string, input []byte) ([]byte, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -523,6 +560,7 @@ func (c *console) runLocal(args []string) ([]byte, error) {
 		global = append(global, "-repo", c.a.repo)
 	}
 	cmd := exec.Command(exe, append(append(global, "app"), args...)...)
+	cmd.Stdin = bytes.NewReader(input)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -598,6 +636,7 @@ func (c *console) dropTarget(w http.ResponseWriter, r *http.Request) {
 	t := c.targets[id]
 	delete(c.targets, id)
 	c.mu.Unlock()
+	c.forgetKey(id)
 	if t != nil {
 		t.conn.Close()
 	}

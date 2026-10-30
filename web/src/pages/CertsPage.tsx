@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { IssuedCert, Signed } from '../api/types';
+import type { Certificates, IssuedCert, Signed } from '../api/types';
 import { useConsole } from '../context';
 import { EXPIRY_WARN_DAYS, expiryText, fmtDate, shortName, splitList, plural } from '../lib/format';
 import { useResource, useTask } from '../lib/hooks';
@@ -16,7 +16,7 @@ export function CertsPage() {
         <div className="panel gate">
           <h2>The CA lives on the lighthouse</h2>
           <p className="dim">
-            {target.label} doesn't hold the CA key, so it can't sign or revoke certificates. Switch to the machine that does.
+            {target.label} isn't the CA, so it can't sign or revoke certificates. Switch to the machine that is.
           </p>
           <div className="row">
             {caTarget ? (
@@ -38,6 +38,11 @@ export function CertsPage() {
 
 type Bundle = { signed: Signed; hasKey: boolean; renewal: boolean };
 
+/** Resolves true once the CA key can be used: on disk there, or pasted. */
+type EnsureKey = () => Promise<boolean>;
+
+const keyHeld = (c?: Certificates | null) => !!c?.caKeyHeldUntil && Date.parse(c.caKeyHeldUntil) > Date.now();
+
 function CertsInner() {
   const { target, toast, state } = useConsole();
   const certs = useResource(() => api.certs(target.id), [target.id]);
@@ -46,6 +51,8 @@ function CertsInner() {
   const [revoking, setRevoking] = useState<IssuedCert | null>(null);
   const [pushing, setPushing] = useState<{ name: string; blocklist: string[] } | null>(null);
   const [nextIp, setNextIp] = useState('');
+  const [askKey, setAskKey] = useState<((ok: boolean) => void) | null>(null);
+  const [removingKey, setRemovingKey] = useState(false);
   const ipTask = useTask();
 
   useEffect(() => {
@@ -54,6 +61,19 @@ function CertsInner() {
   }, [target.id]);
 
   const c = certs.data;
+
+  // Show "Paste the key" again when the console forgets it.
+  const heldUntil = c?.caKeyHeldUntil;
+  useEffect(() => {
+    if (!heldUntil) return;
+    const ms = Date.parse(heldUntil) - Date.now() + 1000;
+    const timer = window.setTimeout(() => void certs.reload(), Math.max(ms, 1000));
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldUntil]);
+
+  const ensureKey: EnsureKey = () =>
+    c?.caKey === 'here' || keyHeld(c) ? Promise.resolve(true) : new Promise((resolve) => setAskKey(() => resolve));
 
   const onSigned = (s: Signed, hasKey: boolean, renewal = false) => {
     setBundle({ signed: s, hasKey, renewal });
@@ -102,6 +122,15 @@ function CertsInner() {
                 ) : (
                   <span className="dim">None listed</span>
                 )}
+              </dd>
+              <dt>Private key</dt>
+              <dd>
+                <CaKeyStatus
+                  certs={c}
+                  onPaste={() => void ensureKey()}
+                  onRemove={() => setRemovingKey(true)}
+                  onForgot={() => void certs.reload()}
+                />
               </dd>
               <dt>Fingerprint</dt>
               <dd><CopyValue text={c.ca.fingerprint} /></dd>
@@ -159,7 +188,7 @@ function CertsInner() {
                         <td className="right actions-cell">
                           {!i.revoked && (
                             <>
-                              <Button small onClick={() => setRenewing(i)}>Renew</Button>{' '}
+                              <Button small onClick={() => void ensureKey().then((ok) => ok && setRenewing(i))}>Renew</Button>{' '}
                               <Button small variant="danger" onClick={() => setRevoking(i)}>Revoke</Button>
                             </>
                           )}
@@ -174,13 +203,36 @@ function CertsInner() {
           </Panel>
 
           <div className="two-col">
-            <SignForm nextIp={nextIp} ipError={ipTask.error} onSigned={(s) => onSigned(s, true)} />
-            <RequestForm onSigned={(s) => onSigned(s, false)} />
+            <SignForm nextIp={nextIp} ipError={ipTask.error} ensureKey={ensureKey} onSigned={(s) => onSigned(s, true)} />
+            <RequestForm ensureKey={ensureKey} onSigned={(s) => onSigned(s, false)} />
           </div>
         </>
       )}
 
       {bundle && <BundleDialog bundle={bundle} onClose={() => setBundle(null)} />}
+
+      {askKey && (
+        <PasteKeyDialog
+          encrypted={!!c?.caKeyEncrypted}
+          onClose={(ok) => {
+            askKey(ok);
+            setAskKey(null);
+            if (ok) void certs.reload();
+          }}
+        />
+      )}
+
+      {removingKey && (
+        <RemoveKeyDialog
+          onClose={(message) => {
+            setRemovingKey(false);
+            if (message) {
+              toast(message);
+              void certs.reload();
+            }
+          }}
+        />
+      )}
 
       {renewing && (
         <RenewDialog
@@ -211,7 +263,7 @@ function CertsInner() {
   );
 }
 
-function SignForm({ nextIp, ipError, onSigned }: { nextIp: string; ipError: string | null; onSigned: (s: Signed) => void }) {
+function SignForm({ nextIp, ipError, ensureKey, onSigned }: { nextIp: string; ipError: string | null; ensureKey: EnsureKey; onSigned: (s: Signed) => void }) {
   const { target } = useConsole();
   const [name, setName] = useState('');
   const [ip, setIp] = useState('');
@@ -228,6 +280,7 @@ function SignForm({ nextIp, ipError, onSigned }: { nextIp: string; ipError: stri
         className="stack"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (!(await ensureKey())) return;
           const r = await task.run(() => api.sign(target.id, { name: name.trim(), ip: ip.trim() || undefined, groups: splitList(groups) }));
           if (r) {
             setName('');
@@ -254,7 +307,7 @@ function SignForm({ nextIp, ipError, onSigned }: { nextIp: string; ipError: stri
   );
 }
 
-function RequestForm({ onSigned }: { onSigned: (s: Signed) => void }) {
+function RequestForm({ ensureKey, onSigned }: { ensureKey: EnsureKey; onSigned: (s: Signed) => void }) {
   const { target } = useConsole();
   const [req, setReq] = useState('');
   const [name, setName] = useState('');
@@ -267,6 +320,7 @@ function RequestForm({ onSigned }: { onSigned: (s: Signed) => void }) {
         className="stack"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (!(await ensureKey())) return;
           const r = await task.run(() => api.signRequest(target.id, { request: req.trim(), name: name.trim() || undefined, ip: ip.trim() || undefined, groups: groups.trim() ? splitList(groups) : undefined }));
           if (r) {
             setReq('');
@@ -437,6 +491,173 @@ function PushDialog({ name, blocklist, onClose }: { name: string; blocklist: str
             </li>
           ))}
         </ul>
+      )}
+    </Dialog>
+  );
+}
+
+function CaKeyStatus({ certs, onPaste, onRemove, onForgot }: { certs: Certificates; onPaste: () => void; onRemove: () => void; onForgot: () => void }) {
+  const { target, toast } = useConsole();
+  const task = useTask();
+  if (certs.caKey === 'here') {
+    return (
+      <>
+        <span className={certs.caKeyEncrypted || target.role !== 'lighthouse' ? undefined : 'warn-text'}>
+          In ca.key on {target.label}
+          {certs.caKeyEncrypted ? ', protected by a passphrase.' : '. Anyone who gets root there can sign certs.'}
+        </span>
+        <div className="row key-actions">
+          <Button small onClick={onRemove}>Take it off this machine</Button>
+        </div>
+      </>
+    );
+  }
+  if (keyHeld(certs)) {
+    return (
+      <>
+        Kept offline. The console holds the copy you pasted, in memory only, until {fmtTime(certs.caKeyHeldUntil!)}.
+        <div className="row key-actions">
+          <Button
+            small
+            busy={task.busy}
+            onClick={async () => {
+              const r = await task.run(() => api.caKeyForget(target.id));
+              if (r) toast(r.message);
+              onForgot();
+            }}
+          >
+            Forget it now
+          </Button>
+        </div>
+        <ErrorText>{task.error}</ErrorText>
+      </>
+    );
+  }
+  return (
+    <>
+      Kept offline. Paste it when you sign; it is never saved on {target.label}.
+      <div className="row key-actions">
+        <Button small onClick={onPaste}>Paste the key</Button>
+      </div>
+    </>
+  );
+}
+
+function fmtTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function KeyFields({ id, keyText, setKeyText, pass, setPass, encrypted }: { id: string; keyText: string; setKeyText: (v: string) => void; pass: string; setPass: (v: string) => void; encrypted: boolean }) {
+  const needPass = encrypted || keyText.includes('ENCRYPTED');
+  return (
+    <>
+      <Field label="CA key" htmlFor={`${id}-key`} hint="Everything from -----BEGIN NEBULA to the END line.">
+        <textarea
+          id={`${id}-key`}
+          className="mono-input"
+          rows={5}
+          value={keyText}
+          onChange={(e) => setKeyText(e.target.value)}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="-----BEGIN NEBULA ED25519 PRIVATE KEY-----"
+        />
+      </Field>
+      {needPass && (
+        <Field label="Passphrase" htmlFor={`${id}-pass`}>
+          <input id={`${id}-pass`} type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="off" />
+        </Field>
+      )}
+    </>
+  );
+}
+
+function PasteKeyDialog({ encrypted, onClose }: { encrypted: boolean; onClose: (ok: boolean) => void }) {
+  const { target } = useConsole();
+  const [keyText, setKeyText] = useState('');
+  const [pass, setPass] = useState('');
+  const task = useTask();
+  const submit = async () => {
+    const r = await task.run(() => api.caKeyCheck(target.id, { key: keyText.trim() + '\n', passphrase: pass || undefined }));
+    if (r) onClose(true);
+  };
+  return (
+    <Dialog
+      title="Paste the CA key"
+      busy={task.busy}
+      onClose={() => onClose(false)}
+      footer={
+        <>
+          <Button onClick={() => onClose(false)} disabled={task.busy}>Cancel</Button>
+          <Button variant="primary" busy={task.busy} disabled={!keyText.trim()} onClick={submit}>Use this key</Button>
+        </>
+      }
+    >
+      <p>
+        {target.label} keeps no copy of the CA key, so signing needs yours. It goes to nebula-cert through a pipe and is never written to disk.
+        The console keeps it in memory for 15 minutes after you last sign, then forgets it.
+      </p>
+      <form className="stack" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+        <KeyFields id="pk" keyText={keyText} setKeyText={setKeyText} pass={pass} setPass={setPass} encrypted={encrypted} />
+      </form>
+      <ErrorText>{task.error}</ErrorText>
+    </Dialog>
+  );
+}
+
+function RemoveKeyDialog({ onClose }: { onClose: (message?: string) => void }) {
+  const { target } = useConsole();
+  const file = useResource(() => api.caKeyFile(target.id), [target.id]);
+  const [step, setStep] = useState<'save' | 'confirm'>('save');
+  const [keyText, setKeyText] = useState('');
+  const [pass, setPass] = useState('');
+  const task = useTask();
+  const encrypted = !!file.data?.encrypted;
+  const remove = async () => {
+    const r = await task.run(() => api.caKeyRemove(target.id, { key: keyText.trim() + '\n', passphrase: pass || undefined }));
+    if (r) onClose(r.message);
+  };
+  return (
+    <Dialog
+      title={step === 'save' ? 'Save the CA key first' : `Remove ca.key from ${target.label}?`}
+      tone={step === 'confirm' ? 'danger' : 'normal'}
+      wide
+      busy={task.busy}
+      onClose={() => onClose()}
+      footer={
+        step === 'save' ? (
+          <>
+            <Button onClick={() => onClose()}>Cancel</Button>
+            <Button variant="primary" disabled={!file.data} onClick={() => setStep('confirm')}>I've saved it</Button>
+          </>
+        ) : (
+          <>
+            <Button onClick={() => setStep('save')} disabled={task.busy}>Back</Button>
+            <Button variant="danger" busy={task.busy} disabled={!keyText.trim()} onClick={remove}>Remove ca.key</Button>
+          </>
+        )
+      }
+    >
+      {step === 'save' ? (
+        <>
+          <Notice tone="warn" title="This is the only way to sign certs for your network.">
+            Put it in a password manager or on an encrypted drive. If it's lost, you need a new CA and a new cert on every host.
+          </Notice>
+          {file.loading && <Loading>Reading ca.key…</Loading>}
+          {file.error && <ErrorText>{file.error}</ErrorText>}
+          {file.data && <CopyBlock text={file.data.key} label={`ca.key${encrypted ? ' (protected by a passphrase)' : ''}`} className="bundle" />}
+        </>
+      ) : (
+        <>
+          <p>
+            Paste the key back from where you saved it. nebctl signs a test cert with it first, and removes ca.key only if that works.
+            After that, you paste the key here each time you sign.
+          </p>
+          <form className="stack" onSubmit={(e) => { e.preventDefault(); void remove(); }}>
+            <KeyFields id="rk" keyText={keyText} setKeyText={setKeyText} pass={pass} setPass={setPass} encrypted={encrypted} />
+          </form>
+          <ErrorText>{task.error}</ErrorText>
+        </>
       )}
     </Dialog>
   );

@@ -488,3 +488,5 @@ p.notice { margin: 0 0 12px; }
   .toast { animation: none !important; }
   .brand-dot.pulse::after { animation: none !important; opacity: .5; transform: scale(1.6); }
 }
+
+.key-actions { margin-top: 6px; }

@@ -250,10 +250,13 @@ func (a *auditor) caKey() {
 			"Keep a copy offline: losing it means signing every host again under a new CA.")
 	case a.isLighthouse():
 		a.add(Warn, "The CA key is on this internet-facing host, without a passphrase",
-			"Anyone who gets root here can sign certs that join your network as any host. Keep ca.key offline and copy it back here only to sign.",
-			"# copy "+p+" somewhere offline first (a password manager, an encrypted drive), then:",
+			"Anyone who gets root here can sign certs that join your network as any host. Keep ca.key offline and paste it in only to sign.",
+			"# Easiest: the console's Certificates page, \"Take the key off this machine\".",
+			"# It shows the key to save, checks your copy, then removes it.",
+			"# By hand: copy "+p+" somewhere offline (a password manager), then",
 			"sudo shred -u "+shellQuote(p),
-			"# to sign later, copy it back to "+p+" (chmod 600), sign, and remove it again")
+			"# To sign later, paste the key on the Certificates page, or run",
+			"# `sudo nebctl ca sign`, which asks for it. It is never saved here.")
 	default:
 		a.add(Info, "The CA key is here, without a passphrase",
 			"Keep a copy offline, and keep this machine's access tight.")

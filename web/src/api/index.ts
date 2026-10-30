@@ -1,5 +1,6 @@
 import { request } from './client';
 import type {
+  CaKeyPaste,
   Certificates,
   ConnectBody,
   Connections,
@@ -58,6 +59,11 @@ export const api = {
     request<{ blocklist: string[]; log: string }>('POST', t(id, 'certs/revoke'), { fingerprint }),
   putBlocklist: (id: string, fingerprints: string[]) =>
     request<{ log: string }>('PUT', t(id, 'blocklist'), { fingerprints }),
+  caKeyCheck: (id: string, k: CaKeyPaste) => request<{ caKeyHeldUntil: string }>('POST', t(id, 'ca-key/check'), k),
+  caKeyFile: (id: string) => request<{ key: string; encrypted: boolean }>('GET', t(id, 'ca-key/file')),
+  caKeyRemove: (id: string, k: CaKeyPaste) =>
+    request<{ message: string; caKeyHeldUntil: string }>('POST', t(id, 'ca-key/remove'), k),
+  caKeyForget: (id: string) => request<{ message: string }>('DELETE', t(id, 'ca-key')),
 
   // configuration
   settings: (id: string) => request<Settings>('GET', t(id, 'settings')),

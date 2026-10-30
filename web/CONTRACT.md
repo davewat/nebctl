@@ -151,6 +151,9 @@ interface Certificates {
   lighthouses: Lighthouse[];
   issued: IssuedCert[];
   blocklist: string[];         // fingerprints
+  caKey: 'here' | 'offline';   // ca.key on the target, or kept offline
+  caKeyEncrypted?: boolean;    // when here: protected by a passphrase
+  caKeyHeldUntil?: string;     // the console holds a pasted key until then
 }
 interface Signed { bundle: string; cert: IssuedCert; replaces?: string; nextIp: string }
 ```
@@ -168,6 +171,25 @@ interface Signed { bundle: string; cert: IssuedCert; replaces?: string; nextIp: 
   the list to other targets (below), listing the connected SSH targets.
 - `PUT blocklist` `{ fingerprints: string[] }` -> `{ log }` (sets the whole list on
   this target and reloads; used for the push)
+
+### The CA key, kept offline
+
+The key can live off the lighthouse. The console then holds a pasted copy in
+its own memory (never the browser's, never a file) for 15 minutes after its
+last use, and sends it with each sign on nebctl's stdin (`-ca-key-stdin`),
+which hands it to nebula-cert through a pipe. Disconnecting the target or
+stopping the console wipes it.
+
+- `POST ca-key/check` `{ key: string; passphrase?: string }` -> `{ caKeyHeldUntil }`
+  Signs a throwaway cert with it to prove it's this CA's key, then holds it.
+- `GET ca-key/file` -> `{ key: string; encrypted: boolean }` (ca.key, to save before removing)
+- `POST ca-key/remove` `{ key: string; passphrase?: string }` -> `{ message; caKeyHeldUntil }`
+  Removes ca.key only if the pasted copy works; then holds that copy.
+- `DELETE ca-key` -> `{ message }` (forget the held copy)
+
+`POST certs` and `POST certs/request` use the held key when there is one.
+Without either, they fail with "the CA key isn't on this machine"; the UI asks
+for the key before it signs.
 
 ## Configuration
 

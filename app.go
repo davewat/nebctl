@@ -28,7 +28,9 @@ type app struct {
 	goos      string
 	noService bool
 	http      *http.Client
-	renamed   string // the old name a cert just signed for another host replaces
+	renamed   string      // the old name a cert just signed for another host replaces
+	console   bool        // running a console command: never prompt
+	caKey     *caKeyInput // the CA key handed in for this run, if any
 }
 
 func (a *app) path(p string) string {
@@ -74,7 +76,8 @@ func exists(p string) bool {
 	return err == nil
 }
 
-func (a *app) haveCA() bool { return exists(a.caDirKey()) }
+// haveCA means this machine is the CA. Its key may be kept offline.
+func (a *app) haveCA() bool { return exists(a.caDirCrt()) }
 
 // loadHost returns the saved setup, or ok=false before any setup.
 func (a *app) loadHost() (h *netconf.Host, ok bool, err error) {
