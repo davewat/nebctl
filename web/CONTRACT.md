@@ -214,7 +214,44 @@ interface SettingsChange {
 - `GET settings` -> `Settings`
 - `PUT settings` `SettingsChange` -> `{ log: string; restarted: boolean }`.
   The new config must pass `nebula -test` first; on failure the old one stays
-  and the error says why.
+  and the error says why. On Linux with ufw, the host firewall is brought in
+  step too, and the log says what changed (`ufw: allowed ...`).
+
+### The host firewall
+
+Two firewalls see Nebula traffic. `inbound` above is nebula's own: what other
+Nebula hosts may reach. The host firewall (ufw) sees every packet, so it must
+let in, for Nebula itself, a lighthouse's UDP port (a node needs nothing), and
+over Nebula, on `nebula1`, every port nebula's firewall lets in. nebctl adds
+those rules with the comment `nebctl`, removes its own when the config stops
+needing them, and never touches any other rule.
+
+```ts
+interface HostFirewallRule {
+  part: "nebula" | "over";   // for Nebula itself, or over Nebula on nebula1
+  port?: string; proto?: string; dev?: string;
+  why: string;
+  text: string;              // as ufw shows it, e.g. "53/udp on nebula1"
+  command: string;           // the ufw command that adds it
+  ok: boolean;               // nebctl's rule for it is in ufw
+}
+interface HostFirewall {
+  firewall: {
+    tool: "ufw" | "firewalld" | "";   // "" on macOS, or no firewall nebctl knows
+    active: boolean;
+    rules: HostFirewallRule[];        // empty on macOS
+    stale: HostFirewallRule[];        // nebctl's rules the config no longer needs
+    note?: string;
+  };
+  role: "lighthouse" | "node";
+  changed: string[];                  // POST: what the sync did
+  log: string;
+}
+```
+
+- `GET firewall` -> `HostFirewall`
+- `POST firewall` -> `HostFirewall` after adding missing rules and removing
+  stale ones (ufw only).
 
 ## Logs and SIEM
 

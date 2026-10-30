@@ -36,6 +36,8 @@ Set up this machine:
                              answer, and whether this machine looks names up there
   status                     show what is set up here
   audit [-json] [-offline]   review this machine's security; exits 1 on any FAIL
+  firewall [-check]          keep ufw in step with nebula: what Nebula itself needs,
+                             and what nebula's firewall lets in over Nebula
   web [-port N] [-no-open]   open the admin console in a browser (localhost only):
                              connections, certs, config, logs and SIEM, health,
                              and other machines (a lighthouse) over SSH
@@ -131,6 +133,8 @@ func (a *app) run(args []string) error {
 		return a.status()
 	case "audit":
 		return a.auditCmd(rest)
+	case "firewall":
+		return a.firewallCmd(rest)
 	case "dns":
 		return a.dnsCmd()
 	case "app":

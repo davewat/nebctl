@@ -169,6 +169,31 @@ export interface Settings {
   blocklist: string[];
 }
 
+/** One rule the host firewall (ufw) needs. part: for Nebula itself, or over Nebula on nebula1. */
+export interface HostFirewallRule {
+  part: 'nebula' | 'over';
+  port?: string;
+  proto?: string;
+  dev?: string;
+  why: string;
+  text: string;
+  command: string;
+  ok: boolean;
+}
+
+export interface HostFirewall {
+  firewall: {
+    tool: 'ufw' | 'firewalld' | '';
+    active: boolean;
+    rules: HostFirewallRule[];
+    stale: HostFirewallRule[];
+    note?: string;
+  };
+  role: 'lighthouse' | 'node';
+  changed: string[];
+  log?: string;
+}
+
 export interface SettingsChange {
   inbound?: Rule[];
   dns?: boolean;

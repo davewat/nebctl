@@ -511,6 +511,8 @@ func (c *console) routes() {
 	app("POST /api/t/{t}/siem/test", fixed("siem-test"))
 	app("GET /api/t/{t}/health", fixed("health"))
 	app("GET /api/t/{t}/audit", fixed("audit"))
+	app("GET /api/t/{t}/firewall", fixed("firewall"))
+	app("POST /api/t/{t}/firewall", func(*http.Request) ([]string, error) { return []string{"firewall", "-apply"}, nil })
 	app("POST /api/t/{t}/update", fixed("update"))
 	app("POST /api/t/{t}/service/{action}", func(r *http.Request) ([]string, error) {
 		switch act := r.PathValue("action"); act {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Lighthouse, Rule, Settings, SettingsChange } from '../api/types';
+import type { HostFirewall, HostFirewallRule, Lighthouse, Rule, Settings, SettingsChange } from '../api/types';
 import { useConsole } from '../context';
 import { splitList } from '../lib/format';
 import { useResource, useTask } from '../lib/hooks';
@@ -83,6 +83,7 @@ function ConfigInner() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [base, setBase] = useState<Draft | null>(null);
   const [result, setResult] = useState<{ log: string; restarted: boolean } | null>(null);
+  const [applied, setApplied] = useState(0);
   const apply = useTask();
 
   useEffect(() => {
@@ -139,6 +140,7 @@ function ConfigInner() {
       setResult(r);
       toast(r.restarted ? 'Changes applied. Nebula restarted.' : 'Changes applied.');
       await res.refresh();
+      setApplied((n) => n + 1);
       refreshState();
     }
   };
@@ -147,7 +149,7 @@ function ConfigInner() {
     <div className="page page-config">
       <PageHead title="Config" sub={`How nebula is set up on ${target.label}. Nothing changes until you apply.`} />
 
-      <Panel title="Firewall: inbound rules" sub="What other hosts may reach on this machine. Anything not listed is dropped.">
+      <Panel title="Nebula firewall: inbound rules" sub="What other Nebula hosts may reach on this machine, over Nebula. Anything not listed is dropped.">
         {draft.rules.length === 0 ? (
           <p className="empty">No inbound rules, so no host can reach anything here. Add one, such as ICMP from any host for ping.</p>
         ) : (
@@ -180,12 +182,14 @@ function ConfigInner() {
         </div>
       </Panel>
 
+      <HostFirewallPanel applied={applied} />
+
       {role === 'lighthouse' ? (
         <Panel title="Lighthouse" sub="Other hosts use this machine to find each other.">
           <div className="stack">
             <Switch checked={draft.dns} onChange={(v) => set({ dns: v })} hint={s.host.domain ? `Hosts can look up names like fe01.${s.host.domain} through this lighthouse.` : undefined}>Answer DNS for Nebula host names</Switch>
             <Switch checked={draft.relay} onChange={(v) => set({ relay: v })} hint="Carries traffic between hosts that can't reach each other directly.">Relay traffic for other hosts</Switch>
-            <Field label="Listen port (UDP)" htmlFor="c-port" hint="Changing the port needs a restart, and the new UDP port must be open in your firewall and your cloud provider's.">
+            <Field label="Listen port (UDP)" htmlFor="c-port" hint="Changing the port needs a restart. nebctl opens the new UDP port in ufw; open it in your cloud provider's firewall too.">
               <input id="c-port" className="mono-input narrow" inputMode="numeric" value={draft.listenPort} onChange={(e) => set({ listenPort: e.target.value })} />
             </Field>
             {portChanged && <Notice tone="warn">Applying this restarts nebula, and every host must be told the new port in its lighthouse list.</Notice>}
@@ -295,5 +299,94 @@ function LiveLevel({ enabled, saved }: { enabled: boolean; saved: string }) {
       )}
       <ErrorText>{task.error ?? live.error}</ErrorText>
     </div>
+  );
+}
+
+// The machine's own firewall (ufw): what Nebula itself needs, and what the
+// Nebula firewall above lets in, mirrored on nebula1. nebctl keeps its rules
+// in step whenever the config is applied.
+function HostFirewallPanel({ applied }: { applied: number }) {
+  const { target, toast } = useConsole();
+  const res = useResource(() => api.hostFirewall(target.id), [target.id, applied]);
+  const sync = useTask();
+  const [synced, setSynced] = useState<HostFirewall | null>(null);
+  useEffect(() => setSynced(null), [res.data]);
+  const v = synced ?? res.data;
+  const fw = v?.firewall;
+  const ufw = fw?.tool === 'ufw';
+  const off = fw ? fw.rules.filter((r) => !r.ok).length + fw.stale.length : 0;
+
+  const doSync = async () => {
+    const r = await sync.run(() => api.syncHostFirewall(target.id));
+    if (r) {
+      setSynced(r);
+      toast(r.changed.length ? `ufw updated: ${r.changed.length} change${r.changed.length === 1 ? '' : 's'}.` : 'ufw was already in step.');
+    }
+  };
+
+  const group = (title: string, part: HostFirewallRule['part'], none: string) => {
+    const rows = fw!.rules.filter((r) => r.part === part);
+    return (
+      <div className="fw-group">
+        <h3>{title}</h3>
+        {rows.length === 0 ? <p className="dim">{none}</p> : (
+          <ul className="fw-list">
+            {rows.map((r) => (
+              <li className="fw-row" key={r.text}>
+                {ufw ? (
+                  <span className="pill"><span className={`dot ${r.ok ? 'dot-ok' : 'dot-revoked'}`} aria-hidden="true" />{r.ok ? 'In place' : 'Missing'}</span>
+                ) : <span className="dim">Needed</span>}
+                <span className="mono">{r.text}</span>
+                <span className="dim">{r.why}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <Panel
+      title={`Host firewall${ufw ? ' (ufw)' : ''}`}
+      sub="What this machine's own firewall must let in for Nebula. nebctl adds these rules, tagged nebctl, and keeps them in step when you apply changes; it never touches rules it didn't add."
+    >
+      {!fw ? (
+        res.error ? <ErrorText>{res.error}</ErrorText> : <Loading>Reading the host firewall…</Loading>
+      ) : !ufw && fw.rules.length === 0 ? (
+        fw.note ? <p className="dim">{fw.note}</p> : <p className="dim">Nothing to open.</p>
+      ) : (
+        <>
+          {group(
+            v!.role === 'lighthouse' ? 'For Nebula itself, from the internet' : 'For Nebula itself',
+            'nebula',
+            'Nothing. A node reaches the lighthouses first, and replies and hole punching come back on that traffic.',
+          )}
+          {group('Over Nebula, on nebula1', 'over', 'Nothing beyond ping, which ufw lets in by default.')}
+          {ufw && <p className="dim">Over Nebula, the Nebula firewall above still decides which hosts and groups get in; ufw can't see groups, so it opens the port to every Nebula host.</p>}
+          {fw.stale.length > 0 && (
+            <div className="fw-group">
+              <h3>No longer needed</h3>
+              <ul className="fw-list">
+                {fw.stale.map((r) => <li className="fw-row" key={r.text}><span className="dim">Will be removed</span><span className="mono">{r.text}</span><span className="dim">nebctl added it; the config no longer needs it</span></li>)}
+              </ul>
+            </div>
+          )}
+          {fw.note && <Notice tone={ufw ? 'warn' : 'info'}>{fw.note}</Notice>}
+          {synced && synced.changed.length > 0 && <pre className="mono-block small" role="status">{synced.changed.join('\n')}</pre>}
+          {ufw && (
+            <div className="panel-foot">
+              {off ? (
+                <>
+                  <Button variant="primary" small busy={sync.busy} onClick={doSync}>Bring ufw in step</Button>
+                  <span>{off} rule{off === 1 ? '' : 's'} to change.</span>
+                </>
+              ) : <span className="dim">ufw is in step with the config.</span>}
+              <ErrorText>{sync.error}</ErrorText>
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
   );
 }

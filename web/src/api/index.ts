@@ -5,6 +5,7 @@ import type {
   ConnectBody,
   Connections,
   Health,
+  HostFirewall,
   Finding,
   Lookup,
   Peer,
@@ -68,6 +69,8 @@ export const api = {
   // configuration
   settings: (id: string) => request<Settings>('GET', t(id, 'settings')),
   putSettings: (id: string, c: SettingsChange) => request<{ log: string; restarted: boolean }>('PUT', t(id, 'settings'), c),
+  hostFirewall: (id: string) => request<HostFirewall>('GET', t(id, 'firewall')),
+  syncHostFirewall: (id: string) => request<HostFirewall>('POST', t(id, 'firewall')),
 
   // logs and SIEM
   logs: (id: string, lines: number) => request<{ lines: string[] }>('GET', t(id, `logs?lines=${lines}`)),

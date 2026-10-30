@@ -620,6 +620,7 @@ func (a *app) writeConfig(h *netconf.Host) (service.DNS, error) {
 		return service.DNS{}, err
 	}
 	a.p.Printf("\nWrote %s (nebula -test passed).\n", a.cfgFile())
+	a.syncFirewallQuietly(h)
 	dns, err := a.setResolver(h)
 	if err != nil {
 		return service.DNS{}, err
@@ -639,6 +640,8 @@ func (a *app) startService(dns service.DNS) error {
 	return nil
 }
 
+// firewallHint says what to open in the cloud provider's firewall and, for
+// firewalld, on this machine; nebctl keeps ufw in step itself.
 func (a *app) firewallHint(port int) {
 	a.p.Printf("\nOther hosts must reach UDP %d here from the internet. Open it in your\n", port)
 	a.p.Println("cloud provider's firewall if it has one, and on this machine:")
@@ -646,9 +649,11 @@ func (a *app) firewallHint(port int) {
 	case a.goos == "darwin":
 		a.p.Println("  allow nebula if macOS asks about incoming connections")
 	case lookPath("ufw"):
-		a.p.Printf("  sudo ufw allow %d/udp\n", port)
+		a.p.Println("  nothing: nebctl keeps ufw in step with nebula (see `sudo nebctl firewall`)")
 	case lookPath("firewall-cmd"):
 		a.p.Printf("  sudo firewall-cmd --permanent --add-port=%d/udp && sudo firewall-cmd --reload\n", port)
+		a.p.Println("  sudo firewall-cmd --permanent --zone=trusted --add-interface=nebula1 && sudo firewall-cmd --reload")
+		a.p.Println("  (the second lets in what nebula's own firewall allows over Nebula)")
 	default:
 		a.p.Println("  (no ufw or firewalld found; nothing to do if no host firewall runs)")
 	}

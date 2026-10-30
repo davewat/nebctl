@@ -26,6 +26,8 @@ import type {
   Finding,
   Health,
   Host,
+  HostFirewall,
+  HostFirewallRule,
   IssuedCert,
   Lighthouse,
   Peer,
@@ -123,6 +125,8 @@ interface Db {
   siem: Siem;
   certs?: Certificates;
   latest: string;
+  // nebctl's ufw rules there (as ufw shows them); undefined: no ufw (the Mac)
+  ufw?: string[];
 }
 
 // The mock lighthouse's CA key. Pasting it back is what proves a copy works.
@@ -243,6 +247,8 @@ function buildDb(target: Target, me: MHost, host: Host): Db {
       : { enabled: false, host: 'siem.example.com', port: 6514, protocol: 'tls', caFile: '/etc/ssl/certs/siem-ca.pem', supported: true },
   };
   if (target.haveCa) db.certs = buildCerts(db);
+  // The lighthouse's ufw predates DNS: its DNS rule is missing.
+  if (target.kind !== 'local') db.ufw = wantedFw(host).map((r) => r.text).filter((t) => target.role !== 'lighthouse' || !t.startsWith('53/'));
   return db;
 }
 
@@ -449,6 +455,57 @@ function signCert(db: Db, name: string, ip: string | undefined, groups: string[]
   return { bundle: bundleText(withKey, n + addr), cert, replaces: existing?.fingerprint, nextIp: nextFreeIp(db) };
 }
 
+// What the host firewall must let in, as nebctl's hostfw package works it out.
+function wantedFw(h: Host): HostFirewallRule[] {
+  const out: HostFirewallRule[] = [];
+  const add = (part: 'nebula' | 'over', port: string, proto: string, why: string) => {
+    const dev = part === 'over' ? 'nebula1' : '';
+    const text = `${port || 'Anywhere'}${proto ? `/${proto}` : ''}${dev ? ` on ${dev}` : ''}`;
+    if (out.some((r) => r.text === text)) return;
+    const args = dev ? `in on ${dev}${proto ? ` proto ${proto}` : ''} to any${port ? ` port ${port}` : ''}` : `${port}${proto ? `/${proto}` : ''}`;
+    out.push({ part, port, proto, dev, why, text, command: `sudo ufw allow ${args} comment 'nebctl'`, ok: false });
+  };
+  if (h.role === 'lighthouse' && h.listenPort > 0) add('nebula', String(h.listenPort), 'udp', "nebula's port: every host reaches this lighthouse here");
+  const inbound = [...h.inbound];
+  const dnsOpen = inbound.some((r) => (r.proto === 'udp' || r.proto === 'any') && (r.port === '53' || r.port === 'any') && !r.group && (!r.host || r.host === 'any'));
+  if (h.role === 'lighthouse' && h.dns && !dnsOpen) inbound.push({ port: '53', proto: 'udp', host: 'any' });
+  for (const r of inbound) {
+    if (r.proto === 'icmp') continue;
+    const dns = r.port === '53' && r.proto === 'udp' && !r.group && (!r.host || r.host === 'any') && h.dns;
+    const who = r.group ? `group ${r.group}` : r.host && r.host !== 'any' ? r.host : 'any host';
+    const why = dns ? 'this lighthouse answers DNS for Nebula hosts' : `nebula lets ${r.proto}/${r.port} from ${who} in${who === 'any host' ? '' : '; nebula limits who'}`;
+    const proto = r.proto === 'any' ? '' : r.proto;
+    const port = r.port === 'any' ? '' : r.port.replace('-', ':');
+    if (port.includes(':') && !proto) {
+      add('over', port, 'tcp', why);
+      add('over', port, 'udp', why);
+    } else add('over', port, proto, why);
+  }
+  return out;
+}
+
+function hostFirewall(db: Db, changed: string[] = []): HostFirewall {
+  const want = wantedFw(db.settings.host);
+  const role = db.settings.host.role;
+  if (!db.ufw) { // the Mac: its firewall allows apps, not ports
+    return { role, changed, firewall: { tool: '', active: false, rules: [], stale: [], note: 'macOS: nothing to keep in step. Allow nebula if macOS asks about incoming connections.' } };
+  }
+  const have = db.ufw;
+  const rules = want.map((r) => ({ ...r, ok: have.includes(r.text) }));
+  const stale = have.filter((t) => !want.some((r) => r.text === t)).map((text): HostFirewallRule => ({ part: 'over', why: '', text, command: '', ok: true }));
+  return { role, changed, firewall: { tool: 'ufw', active: true, rules, stale } };
+}
+
+function syncFw(db: Db): string[] {
+  if (!db.ufw) return [];
+  const want = wantedFw(db.settings.host);
+  const did: string[] = [];
+  for (const t of db.ufw.filter((t) => !want.some((r) => r.text === t))) did.push(`removed ${t}`);
+  for (const r of want.filter((r) => !db.ufw!.includes(r.text))) did.push(`allowed ${r.text}: ${r.why}`);
+  db.ufw = want.map((r) => r.text);
+  return did;
+}
+
 function applySettings(db: Db, c: SettingsChange): { log: string; restarted: boolean } {
   const s = db.settings;
   let restarted = false;
@@ -489,6 +546,7 @@ function applySettings(db: Db, c: SettingsChange): { log: string; restarted: boo
     s.metrics.enabled = c.metrics.enabled;
   }
   db.state.host = s.host;
+  for (const d of syncFw(db)) notes.push(`ufw: ${d}`);
   return {
     log: `Wrote /etc/nebula/config.yml\nnebula -test -config /etc/nebula/config.yml: ok\n${notes.join('\n')}${notes.length ? '\n' : ''}${restarted ? 'Restarted nebula.' : 'Reloaded nebula (SIGHUP).'}`,
     restarted,
@@ -687,6 +745,8 @@ const routes: Array<[string, RegExp, Handler, number?]> = [
 
   ['GET', /^settings$/, (db) => JSON.parse(JSON.stringify(db.settings)) as Settings],
   ['PUT', /^settings$/, (db, _m, b) => applySettings(db, b as SettingsChange), 900],
+  ['GET', /^firewall$/, (db) => hostFirewall(db), 500],
+  ['POST', /^firewall$/, (db) => hostFirewall(db, syncFw(db)), 900],
 
   ['GET', /^logs$/, (db, _m, _b, q) => {
     const n = Math.min(Math.max(Number(q.get('lines')) || 200, 10), 1000);

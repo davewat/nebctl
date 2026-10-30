@@ -55,7 +55,7 @@ var consoleCommands = []string{
 	"connections", "tunnel", "close-tunnel", "create-tunnel", "change-remote", "lookup", "log-level",
 	"reload", "admin-enable", "certs", "next-ip", "sign", "sign-request", "revoke", "blocklist",
 	"settings", "configure", "logs", "siem", "siem-test", "health", "audit", "update", "service",
-	"ca-key-check", "ca-key-show", "ca-key-remove",
+	"ca-key-check", "ca-key-show", "ca-key-remove", "firewall",
 }
 
 // consoleCmd runs one console command. ok is false for a name it doesn't know.
@@ -90,6 +90,7 @@ func (a *app) consoleCmd(name string, args []string) (ok bool, err error) {
 	fingerprint := fs.String("fingerprint", "", "revoke: the cert's fingerprint")
 	set := fs.String("set", "", "blocklist: the whole list, comma separated")
 	jsonIn := fs.String("json", "", "configure, siem: the change as JSON")
+	apply := fs.Bool("apply", false, "firewall: bring ufw in step")
 	lines := fs.Int("lines", 200, "logs: how many lines")
 	caKeyStdin := fs.Bool("ca-key-stdin", false, `sign, ca-key-*: read {"key","passphrase"} from stdin`)
 	if err := fs.Parse(args); err != nil {
@@ -203,6 +204,9 @@ func (a *app) consoleCmd(name string, args []string) (ok bool, err error) {
 		return true, withLog(v, err)
 	case "blocklist":
 		return true, withLog(nil, a.consoleBlocklist(splitList(*set)))
+	case "firewall":
+		v, err := a.consoleFirewall(*apply)
+		return true, withLog(v, err)
 	case "settings":
 		return true, a.consoleSettings()
 	case "configure":

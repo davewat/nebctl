@@ -28,9 +28,10 @@ type app struct {
 	goos      string
 	noService bool
 	http      *http.Client
-	renamed   string      // the old name a cert just signed for another host replaces
-	console   bool        // running a console command: never prompt
-	caKey     *caKeyInput // the CA key handed in for this run, if any
+	renamed   string                               // the old name a cert just signed for another host replaces
+	console   bool                                 // running a console command: never prompt
+	caKey     *caKeyInput                          // the CA key handed in for this run, if any
+	ufwCmd    func(args ...string) (string, error) // set by tests; nil runs the real ufw
 }
 
 func (a *app) path(p string) string {

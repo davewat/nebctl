@@ -146,10 +146,7 @@ func Render(h Host, f Files, goos string) string {
 	w("    - port: any")
 	w("      proto: any")
 	w("      host: any")
-	inbound := h.Inbound
-	if lighthouse && h.DNS && !allows(inbound, DNSRule) {
-		inbound = append(inbound[:len(inbound):len(inbound)], DNSRule)
-	}
+	inbound := Inbound(h)
 	if len(inbound) == 0 {
 		w("  inbound: []")
 	} else {
@@ -168,6 +165,16 @@ func Render(h Host, f Files, goos string) string {
 		}
 	}
 	return b.String()
+}
+
+// Inbound is the inbound rules nebula's firewall gets: h's own, plus DNS on
+// a lighthouse that answers it.
+func Inbound(h Host) []Rule {
+	inbound := h.Inbound
+	if h.Role == RoleLighthouse && h.DNS && !allows(inbound, DNSRule) {
+		inbound = append(inbound[:len(inbound):len(inbound)], DNSRule)
+	}
+	return inbound
 }
 
 // allows reports whether rules already let want's traffic in from any host.

@@ -111,6 +111,11 @@ To update nebctl itself, repeat the `curl` and `install` lines from step 2.
   sends those lookups to it through systemd-resolved; macOS through
   `/etc/resolver/<domain>`. On a Mac, test with
   `dscacheutil -q host -a name lh.example.internal` (`dig` skips the resolver).
+- **Two firewalls.** Nebula's own firewall (the console's Config page) says what
+  other Nebula hosts may reach. On Linux, nebctl keeps ufw in step with it:
+  a lighthouse's UDP port from the internet, and on `nebula1` every port
+  nebula lets in (DNS included). A node needs no port open for Nebula itself.
+  It only touches ufw rules tagged `nebctl`. Check with `sudo nebctl firewall`.
 - **Revoking a cert.** Each machine keeps its own blocklist. After you revoke a
   cert, the console offers to push the list to the machines it's connected to.
 - **Back up** `/etc/nebula/ca/ca.key` on the lighthouse. Every cert expires with

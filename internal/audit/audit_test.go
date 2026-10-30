@@ -179,7 +179,7 @@ func TestFreshLighthouse(t *testing.T) {
 
 	fw := level(t, fs, "No host firewall is on", Fail)
 	fixHas(t, fw, "sudo apt install ufw")
-	fixHas(t, fw, "sudo ufw allow 4242/udp")
+	fixHas(t, fw, "sudo nebctl firewall")
 	if i, j := strings.Index(strings.Join(fw.Fix, "\n"), "allow OpenSSH"), strings.Index(strings.Join(fw.Fix, "\n"), "ufw enable"); i > j {
 		t.Error("the fix enables ufw before allowing SSH")
 	}
@@ -275,12 +275,48 @@ OpenSSH (v6)               ALLOW IN    Anywhere (v6)
 	level(t, fs, "nginx on TCP 80 listens on every address; ufw blocks it", Info)
 }
 
+// ufw on with nebula's port and SSH over Nebula allowed, but not DNS: hosts
+// time out looking up names under the network's domain.
+func TestLighthouseDNSBlocked(t *testing.T) {
+	f, in := hs01()
+	in.Host.DNS = true
+	f.has["ufw"] = true
+	rules := "Status: active\nDefault: deny (incoming), allow (outgoing)\n\nTo  Action  From\n--  ------  ----\n" +
+		"4242/udp                   ALLOW IN    Anywhere\n" +
+		"22/tcp on nebula1          ALLOW IN    Anywhere\n"
+	f.cmds["ufw status verbose"] = rules
+	blocked := level(t, Run(in), "ufw blocks what nebula lets in over Nebula: 53/udp", Fail)
+	fixHas(t, blocked, "sudo nebctl firewall")
+	if !strings.Contains(blocked.Detail, "DNS") {
+		t.Errorf("detail doesn't mention DNS: %q", blocked.Detail)
+	}
+
+	for _, rule := range []string{
+		"53/udp on nebula1          ALLOW IN    Anywhere\n",
+		"53/udp                     ALLOW IN    10.221.220.0/22\n",
+		"Anywhere on nebula1        ALLOW IN    Anywhere\n",
+	} {
+		f.cmds["ufw status verbose"] = rules + rule
+		fs := Run(in)
+		level(t, fs, "ufw lets in what nebula allows over Nebula", Pass)
+		none(t, fs, "ufw blocks what")
+	}
+
+	// From an unrelated network, the rule doesn't cover Nebula hosts.
+	f.cmds["ufw status verbose"] = rules + "53/udp                     ALLOW IN    192.0.2.0/24\n"
+	level(t, Run(in), "ufw blocks what nebula lets in over Nebula: 53/udp", Fail)
+
+	// Without a firewall, the steps to turn ufw on include nebctl's sync.
+	f.cmds["ufw status verbose"] = "Status: inactive\n"
+	fixHas(t, level(t, Run(in), "No host firewall is on", Fail), "sudo nebctl firewall")
+}
+
 func TestLighthousePortBlocked(t *testing.T) {
 	f, in := hs01()
 	f.has["ufw"] = true
 	f.cmds["ufw status verbose"] = "Status: active\nDefault: deny (incoming), allow (outgoing)\n\nTo  Action  From\n--  ------  ----\n22/tcp                     ALLOW IN    Anywhere\n"
 	fs := Run(in)
-	fixHas(t, level(t, fs, "ufw blocks UDP 4242", Fail), "sudo ufw allow 4242/udp")
+	fixHas(t, level(t, fs, "ufw blocks UDP 4242", Fail), "sudo nebctl firewall")
 }
 
 func TestServiceDownAndBadFiles(t *testing.T) {

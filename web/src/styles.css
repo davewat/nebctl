@@ -490,3 +490,13 @@ p.notice { margin: 0 0 12px; }
 }
 
 .key-actions { margin-top: 6px; }
+
+/* ---- host firewall ------------------------------------------------------- */
+
+.fw-group h3 { font-size: 13px; margin: 14px 0 6px; }
+.fw-group:first-child h3 { margin-top: 0; }
+.fw-list { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; }
+.fw-row { display: grid; grid-template-columns: 96px minmax(140px, 220px) 1fr; gap: 12px; align-items: baseline; }
+@media (max-width: 640px) {
+  .fw-row { grid-template-columns: 1fr; gap: 2px; }
+}

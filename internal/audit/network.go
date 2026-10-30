@@ -4,10 +4,15 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/davewat/nebctl/internal/hostfw"
 )
+
+func isDNS(r hostfw.Rule) bool { return r.Port == "53" && r.Proto == "udp" }
 
 // tunDev is the tun device nebctl's Linux config names.
 const tunDev = "nebula1"
@@ -218,6 +223,62 @@ func (a *auditor) nebulaCIDR() (network, addr string) {
 	return p.Masked().String(), p.Addr().String()
 }
 
+// syncFix brings ufw in step with nebula's config.
+const syncFix = "sudo nebctl firewall"
+
+// blockedOver returns the rules nebula's firewall needs over Nebula that ufw
+// doesn't let in on the nebula device.
+func (a *auditor) blockedOver(fw firewall) []hostfw.Rule {
+	if a.in.Host == nil {
+		return nil
+	}
+	network, _ := a.nebulaCIDR()
+	var out []hostfw.Rule
+	for _, w := range hostfw.Wanted(*a.in.Host) {
+		if w.Part == hostfw.PartOver && !fw.letsInOver(w, network) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// letsInOver reports whether a ufw rule lets w in on the nebula device: one
+// on that device, or one on every device from anywhere or the Nebula
+// network.
+func (fw firewall) letsInOver(w hostfw.Rule, network string) bool {
+	protos := []string{w.Proto}
+	if w.Proto == "" {
+		protos = []string{"tcp", "udp"}
+	}
+	lo, hi, _ := strings.Cut(w.Port, ":")
+	for _, proto := range protos {
+		ok := false
+		for _, r := range fw.rules {
+			from := strings.TrimSuffix(r.from, " (v6)")
+			if !(r.iface == tunDev || r.iface == "" && (from == "Anywhere" || from == network)) {
+				continue
+			}
+			if w.Port == "" {
+				ok = strings.HasPrefix(r.to, "Anywhere") && (!strings.Contains(r.to, "/") || strings.HasSuffix(r.to, "/"+proto))
+			} else {
+				l, _ := strconv.Atoi(lo)
+				h := l
+				if hi != "" {
+					h, _ = strconv.Atoi(hi)
+				}
+				ok = r.matches(l, proto) && r.matches(h, proto)
+			}
+			if ok {
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *auditor) firewallChecks() {
 	a.section = "Firewall"
 	fw := a.fw
@@ -229,8 +290,8 @@ func (a *auditor) firewallChecks() {
 			fix = append(fix, "sudo apt install ufw")
 		}
 		fix = append(fix, "sudo ufw allow OpenSSH")
-		if a.isLighthouse() {
-			fix = append(fix, fmt.Sprintf("sudo ufw allow %d/udp", port))
+		if a.in.Host != nil {
+			fix = append(fix, syncFix+"   # what nebula needs")
 		}
 		fix = append(fix, "sudo ufw enable")
 		a.add(Fail, "No host firewall is on",
@@ -249,7 +310,21 @@ func (a *auditor) firewallChecks() {
 			a.add(Pass, fmt.Sprintf("ufw lets nodes reach nebula on UDP %d", port), "")
 		} else {
 			a.add(Fail, fmt.Sprintf("ufw blocks UDP %d: nodes can't reach this lighthouse", port), "",
-				fmt.Sprintf("sudo ufw allow %d/udp", port))
+				syncFix, fmt.Sprintf("# or: sudo ufw allow %d/udp", port))
+		}
+	}
+	if fw.kind == "ufw" && fw.denyIn && a.in.Host != nil {
+		if blocked := a.blockedOver(fw); len(blocked) > 0 {
+			var names []string
+			for _, r := range blocked {
+				names = append(names, strings.TrimSuffix(r.String(), " on "+tunDev))
+			}
+			a.add(Fail, "ufw blocks what nebula lets in over Nebula: "+strings.Join(names, ", "),
+				"Nebula's firewall allows these, but ufw drops them on "+tunDev+", so Nebula hosts can't reach them"+
+					map[bool]string{true: " (DNS among them: names under the network's domain don't resolve)", false: ""}[a.isLighthouse() && a.in.Host.DNS && slices.ContainsFunc(blocked, isDNS)]+".",
+				syncFix)
+		} else if len(hostfw.Wanted(*a.in.Host)) > 0 {
+			a.add(Pass, "ufw lets in what nebula allows over Nebula", "")
 		}
 	}
 	allow := "SSH"
