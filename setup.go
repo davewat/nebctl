@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/davewat/nebctl/internal/bundle"
+	"github.com/davewat/nebctl/internal/keep"
 	"github.com/davewat/nebctl/internal/netconf"
 	"github.com/davewat/nebctl/internal/pki"
 	"github.com/davewat/nebctl/internal/service"
@@ -81,12 +83,10 @@ func (a *app) setupLighthouse() error {
 	h.Lighthouses = netconf.AddLighthouse(h.Lighthouses, me)
 
 	if a.haveCA() {
-		network, err := a.loadNetwork()
-		if err != nil {
-			return err
-		}
-		network.Lighthouses = netconf.AddLighthouse(network.Lighthouses, me)
-		if err := network.Save(a.networkFile()); err != nil {
+		if err := a.commitNetwork(nil, func(n *netconf.Network) error {
+			n.Lighthouses = netconf.AddLighthouse(n.Lighthouses, me)
+			return nil
+		}); err != nil {
 			return err
 		}
 	}
@@ -530,7 +530,31 @@ func (a *app) installCert(caData, crtData, keyData []byte) (pki.Cert, error) {
 	return c, nil
 }
 
+// askFirewall asks which inbound rules to keep or set. When the answer drops
+// the last rule that lets SSH in over Nebula, it says so and asks again
+// whether to save anyway; no rewrites the question.
 func (a *app) askFirewall(h *netconf.Host) error {
+	before := slices.Clone(h.Inbound)
+	for {
+		if err := a.askFirewallRules(h); err != nil {
+			return err
+		}
+		if !netconf.OpensSSH(before) || netconf.OpensSSH(h.Inbound) {
+			return nil
+		}
+		a.p.Printf("\n%s\n", noSSHWarning(h.Name))
+		ok, err := a.p.Confirm("Save anyway?", false)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		h.Inbound = slices.Clone(before)
+	}
+}
+
+func (a *app) askFirewallRules(h *netconf.Host) error {
 	if len(h.Inbound) > 0 {
 		a.p.Println("Other Nebula hosts may reach this one with:")
 		for _, r := range h.Inbound {
@@ -605,6 +629,16 @@ func (a *app) writeConfig(h *netconf.Host) (service.DNS, error) {
 		files.AdminHostKey, files.AdminUserKey = a.adminKeys().HostKey(), pub
 	}
 	cfg := netconf.Render(*h, files, a.goos)
+	// The lock covers the stale check, the config swap and the state save,
+	// and is let go before anything slow (resolver, SIEM, the restart).
+	unlock, err := a.lockState()
+	if err != nil {
+		return service.DNS{}, err
+	}
+	defer unlock()
+	if err := h.CheckUnchanged(a.stateFile()); err != nil {
+		return service.DNS{}, err
+	}
 	tmp := a.cfgFile() + ".new"
 	if err := writeFile(tmp, []byte(cfg), 0o600); err != nil {
 		return service.DNS{}, err
@@ -613,12 +647,18 @@ func (a *app) writeConfig(h *netconf.Host) (service.DNS, error) {
 		os.Remove(tmp)
 		return service.DNS{}, fmt.Errorf("nebula rejected the new config, so the old one is kept:\n%s", strings.TrimSpace(string(out)))
 	}
+	// Keep the config this replaces as config.yml.prev, for restore-config.
+	if _, err := keep.PreviousUnlessSame(a.cfgFile(), tmp); err != nil {
+		os.Remove(tmp)
+		return service.DNS{}, fmt.Errorf("keeping the old config as %s: %w", keep.Prev(a.cfgFile()), err)
+	}
 	if err := os.Rename(tmp, a.cfgFile()); err != nil {
 		return service.DNS{}, err
 	}
 	if err := h.Save(a.stateFile()); err != nil {
 		return service.DNS{}, err
 	}
+	a.releaseState()
 	a.p.Printf("\nWrote %s (nebula -test passed).\n", a.cfgFile())
 	a.syncFirewallQuietly(h)
 	dns, err := a.setResolver(h)
@@ -634,6 +674,9 @@ func (a *app) startService(dns service.DNS) error {
 		return nil
 	}
 	if err := service.Install(a.goos, a.nebulaBin(), a.cfgFile(), dns); err != nil {
+		return err
+	}
+	if err := a.verifyRunning(true, false); err != nil {
 		return err
 	}
 	a.p.Println("nebula is running and starts at boot. Check it with `nebctl status`.")

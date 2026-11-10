@@ -234,6 +234,7 @@ func (a *app) dnsCmd() error {
 	}
 
 	var network *netconf.Network
+	renamedSelf := false // this machine's lighthouse entry takes its new cert name
 	if a.haveCA() {
 		if network, err = a.loadNetwork(); err != nil {
 			return err
@@ -249,8 +250,10 @@ func (a *app) dnsCmd() error {
 		if h.Domain, err = a.askDomain(def); err != nil {
 			return err
 		}
-		network.Domain = h.Domain
-		if err := network.Save(a.networkFile()); err != nil {
+		if err := a.commitNetwork(network, func(n *netconf.Network) error {
+			n.Domain = h.Domain
+			return nil
+		}); err != nil {
 			return err
 		}
 		if h.Domain != "" && !netconf.Under(h.Name, h.Domain) {
@@ -274,11 +277,7 @@ func (a *app) dnsCmd() error {
 				if network, err = a.loadNetwork(); err != nil {
 					return err
 				}
-				for k := range network.Lighthouses {
-					if network.Lighthouses[k].NebulaIP == self {
-						network.Lighthouses[k].Name = h.Name
-					}
-				}
+				renamedSelf = true
 			}
 		}
 	} else {
@@ -323,14 +322,21 @@ func (a *app) dnsCmd() error {
 		}
 	}
 	if network != nil {
-		for _, l := range h.Lighthouses {
-			for k := range network.Lighthouses {
-				if network.Lighthouses[k].NebulaIP == l.NebulaIP {
-					network.Lighthouses[k].DNS = l.DNS
+		if err := a.commitNetwork(network, func(n *netconf.Network) error {
+			for k := range n.Lighthouses {
+				if renamedSelf && n.Lighthouses[k].NebulaIP == self {
+					n.Lighthouses[k].Name = h.Name
 				}
 			}
-		}
-		if err := network.Save(a.networkFile()); err != nil {
+			for _, l := range h.Lighthouses {
+				for k := range n.Lighthouses {
+					if n.Lighthouses[k].NebulaIP == l.NebulaIP {
+						n.Lighthouses[k].DNS = l.DNS
+					}
+				}
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 	}

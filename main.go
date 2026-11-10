@@ -32,6 +32,8 @@ Set up this machine:
   node                       set up a node that joins a network
   request                    make a key here and a request for the CA host to sign
   config                     rewrite config.yml from nebctl.json and restart nebula
+  restore-config             put back the config.yml that config replaced (config.yml.prev),
+                             check it with nebula -test and restart nebula
   dns                        find Nebula hosts by name: the domain, which lighthouses
                              answer, and whether this machine looks names up there
   status                     show what is set up here
@@ -129,6 +131,8 @@ func (a *app) run(args []string) error {
 		return nil
 	case "config":
 		return a.reconfigure()
+	case "restore-config":
+		return a.restoreConfig()
 	case "status":
 		return a.status()
 	case "audit":

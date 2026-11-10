@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { ApiError } from '../api/client';
 import type { HostFirewall, HostFirewallRule, Lighthouse, Rule, Settings, SettingsChange } from '../api/types';
 import { useConsole } from '../context';
 import { splitList } from '../lib/format';
 import { useResource, useTask } from '../lib/hooks';
-import { Button, CopyBlock, ErrorText, Field, Loading, Notice, PageHead, Panel, Switch } from '../ui';
+import { Button, CopyBlock, Dialog, ErrorText, Field, Loading, Notice, PageHead, Panel, Switch } from '../ui';
 
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error'];
 
@@ -85,6 +86,9 @@ function ConfigInner() {
   const [result, setResult] = useState<{ log: string; restarted: boolean } | null>(null);
   const [applied, setApplied] = useState(0);
   const apply = useTask();
+  // Set when the machine answers that the new inbound rules no longer let SSH
+  // in over Nebula: nothing was saved, and the operator must say yes.
+  const [noSsh, setNoSsh] = useState<string | null>(null);
 
   useEffect(() => {
     if (res.data) {
@@ -133,10 +137,22 @@ function ConfigInner() {
   const setLh = (i: number, p: Partial<LhRow>) => set({ lighthouses: draft.lighthouses.map((r, j) => (j === i ? { ...r, ...p } : r)) });
   const portChanged = role === 'lighthouse' && base.listenPort !== draft.listenPort;
 
-  const doApply = async () => {
+  const doApply = async (confirmNoSsh = false) => {
     setResult(null);
-    const r = await apply.run(() => api.putSettings(target.id, change));
+    const r = await apply.run(async () => {
+      try {
+        return await api.putSettings(target.id, confirmNoSsh ? { ...change, confirmNoSsh: true } : change);
+      } catch (e) {
+        const b = e instanceof ApiError ? (e.body as { confirmRequired?: string; message?: string } | undefined) : undefined;
+        if (e instanceof ApiError && e.status === 409 && b?.confirmRequired === 'no_ssh') {
+          setNoSsh(b.message ?? `This removes SSH over Nebula to ${target.label}. If you reach it only over Nebula you will be locked out.`);
+          return undefined;
+        }
+        throw e;
+      }
+    });
     if (r) {
+      setNoSsh(null);
       setResult(r);
       toast(r.restarted ? 'Changes applied. Nebula restarted.' : 'Changes applied.');
       await res.refresh();
@@ -262,8 +278,27 @@ function ConfigInner() {
           {apply.error ? <ErrorText>{apply.error}</ErrorText> : problems.length ? <span className="error-text">{problems[0]}{problems.length > 1 ? ` (and ${problems.length - 1} more)` : ''}</span> : dirty ? <span>{dirty} {dirty === 1 ? 'change' : 'changes'} not applied yet. The config is tested with nebula -test first.</span> : <span className="dim">No changes to apply.</span>}
         </div>
         <Button onClick={() => setDraft(base)} disabled={!dirty || apply.busy}>Discard</Button>
-        <Button variant="primary" busy={apply.busy} disabled={!dirty || problems.length > 0} onClick={doApply}>Apply changes</Button>
+        <Button variant="primary" busy={apply.busy} disabled={!dirty || problems.length > 0} onClick={() => doApply()}>Apply changes</Button>
       </div>
+
+      {noSsh && (
+        <Dialog
+          title="Remove SSH over Nebula?"
+          tone="danger"
+          busy={apply.busy}
+          onClose={() => setNoSsh(null)}
+          footer={
+            <>
+              <Button onClick={() => setNoSsh(null)} disabled={apply.busy}>Cancel</Button>
+              <Button variant="primary" busy={apply.busy} onClick={() => doApply(true)}>Save anyway</Button>
+            </>
+          }
+        >
+          <p>{noSsh}</p>
+          <p>Save anyway?</p>
+          <ErrorText>{apply.error}</ErrorText>
+        </Dialog>
+      )}
     </div>
   );
 }

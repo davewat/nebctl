@@ -3,6 +3,8 @@
 package netconf
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +63,35 @@ func (r Rule) String() string {
 	return fmt.Sprintf("%s/%s from %s", r.Proto, r.Port, who)
 }
 
+// OpensSSH reports whether any rule lets tcp/22 in: a protocol of tcp or any
+// whose port is 22, any, or a range holding 22, from any host or group.
+func OpensSSH(rules []Rule) bool {
+	for _, r := range rules {
+		if r.Proto != "tcp" && r.Proto != "any" {
+			continue
+		}
+		port := strings.TrimSpace(r.Port)
+		if port == "any" {
+			return true
+		}
+		lo, hi, isRange := strings.Cut(port, "-")
+		a, err := strconv.Atoi(lo)
+		if err != nil {
+			continue
+		}
+		b := a
+		if isRange {
+			if b, err = strconv.Atoi(hi); err != nil {
+				continue
+			}
+		}
+		if a <= 22 && 22 <= b {
+			return true
+		}
+	}
+	return false
+}
+
 // Host is this machine's setup, saved as nebctl.json beside config.yml.
 type Host struct {
 	Role        string       `json:"role"` // "lighthouse" or "node"
@@ -87,6 +118,8 @@ type Host struct {
 	Blocklist []string `json:"blocklist,omitempty"`
 	// SIEM forwards nebula's log lines to a syslog collector (Linux).
 	SIEM *SIEM `json:"siem,omitempty"`
+
+	rev string // digest of the file this was loaded from, for SaveIfUnchanged
 }
 
 type Admin struct {
@@ -416,40 +449,79 @@ var (
 	AllRule  = Rule{Port: "any", Proto: "any", Host: "any"}
 )
 
-func load(path string, v any) error {
+// ErrChanged means the state file was rewritten by someone else after this
+// copy was loaded, so saving it would silently drop their change.
+var ErrChanged = errors.New("changed by another nebctl while you were working; nothing was written, so run it again")
+
+// load reads path into v and returns the file's digest.
+func load(path string, v any) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := json.Unmarshal(data, v); err != nil {
-		return fmt.Errorf("reading %s: %w", path, err)
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	return digest(data), nil
+}
+
+func digest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func save(path string, v any, mode os.FileMode) (string, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	data = append(data, '\n')
+	return digest(data), WriteFileAtomic(path, data, mode)
+}
+
+// unchanged reports whether path still holds what was loaded (rev). A copy
+// that was not loaded from the file (rev empty) is not checked.
+func unchanged(path, rev string) error {
+	if rev == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || digest(data) != rev {
+		return fmt.Errorf("%s: %w", path, ErrChanged)
 	}
 	return nil
 }
 
-func save(path string, v any, mode os.FileMode) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return WriteFileAtomic(path, append(data, '\n'), mode)
-}
-
 func LoadHost(path string) (*Host, error) {
 	var h Host
-	return &h, load(path, &h)
+	rev, err := load(path, &h)
+	h.rev = rev
+	return &h, err
 }
 
-func (h *Host) Save(path string) error { return save(path, h, 0o644) }
+func (h *Host) Save(path string) (err error) {
+	h.rev, err = save(path, h, 0o644)
+	return err
+}
+
+// CheckUnchanged is for a copy loaded earlier: with the state lock held, it
+// returns ErrChanged when the file was rewritten since the load, so the caller
+// can stop before it writes anything.
+func (h *Host) CheckUnchanged(path string) error { return unchanged(path, h.rev) }
 
 func LoadNetwork(path string) (*Network, error) {
 	var n Network
-	return &n, load(path, &n)
+	_, err := load(path, &n)
+	return &n, err
 }
 
-func (n *Network) Save(path string) error { return save(path, n, 0o600) }
+func (n *Network) Save(path string) error {
+	_, err := save(path, n, 0o600)
+	return err
+}
 
-// WriteFileAtomic writes beside path and renames over it.
+// WriteFileAtomic writes beside path, syncs it to disk and renames over it,
+// so a crash leaves the old file or the whole new one.
 func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
@@ -464,8 +536,19 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil { // make the rename durable
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }

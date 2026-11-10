@@ -521,6 +521,16 @@ function applySettings(db: Db, c: SettingsChange): { log: string; restarted: boo
     s.host.listenPort = c.listenPort;
   }
   if (c.inbound) {
+    const opens22 = (rules: Rule[]) => rules.some((r) => {
+      if (r.proto !== 'tcp' && r.proto !== 'any') return false;
+      if (r.port === 'any') return true;
+      const [lo, hi] = r.port.split('-').map((n) => parseInt(n, 10));
+      return lo <= 22 && 22 <= (Number.isNaN(hi) ? lo : hi);
+    });
+    if (opens22(s.host.inbound) && !opens22(c.inbound) && !c.confirmNoSsh) {
+      const message = `This removes SSH over Nebula to ${s.host.name}. If you reach it only over Nebula you will be locked out.`;
+      throw new ApiError(409, message, { error: message, confirmRequired: 'no_ssh', node: s.host.name, message });
+    }
     for (const r of c.inbound) {
       if (!/^(any|\d{1,5}(-\d{1,5})?)$/.test(r.port)) throw new ApiError(400, `"${r.port}" isn't a port or range. Use a number, a range like 8000-8100, or any. The old config is still in use.`);
     }

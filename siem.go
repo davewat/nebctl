@@ -156,6 +156,15 @@ func (a *app) consoleSetSIEM(raw string) error {
 	if err := a.requireRoot(); err != nil {
 		return err
 	}
+	// One critical section from the first load to the save: another nebctl
+	// (a parallel console request, the CLI) waits here instead of racing.
+	// Nothing in this command waits on a prompt, and writeConfig lets the
+	// lock go before the restart.
+	unlock, err := a.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	var in struct {
 		Enabled bool `json:"enabled"`
 		netconf.SIEM

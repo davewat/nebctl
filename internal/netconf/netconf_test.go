@@ -209,3 +209,36 @@ func TestValidFingerprint(t *testing.T) {
 		}
 	}
 }
+
+// 2026-11-09: OpensSSH decides whether a firewall save would lock the admin
+// out of tcp/22, so it must see every rule shape that covers it and none that
+// does not.
+func TestOpensSSH(t *testing.T) {
+	r := func(proto, port string) []Rule { return []Rule{{Proto: proto, Port: port, Host: "any"}} }
+	for _, c := range []struct {
+		rules []Rule
+		want  bool
+	}{
+		{r("tcp", "22"), true},
+		{r("tcp", "any"), true},
+		{r("any", "any"), true},
+		{r("any", "22"), true},
+		{r("tcp", "20-30"), true},
+		{r("tcp", "22-22"), true},
+		{r("tcp", "1-1024"), true},
+		{[]Rule{{Proto: "tcp", Port: "22", Group: "admins"}}, true},
+		{r("udp", "22"), false},
+		{r("icmp", "any"), false},
+		{r("tcp", "23-30"), false},
+		{r("tcp", "2-21"), false},
+		{r("tcp", "2222"), false},
+		{r("tcp", "x"), false},
+		{nil, false},
+		{append(r("icmp", "any"), r("tcp", "443")...), false},
+		{append(r("icmp", "any"), r("tcp", "22")...), true},
+	} {
+		if got := OpensSSH(c.rules); got != c.want {
+			t.Errorf("%v: %v, want %v", c.rules, got, c.want)
+		}
+	}
+}

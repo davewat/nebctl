@@ -210,6 +210,8 @@ export interface HostFirewall {
 
 export interface SettingsChange {
   inbound?: Rule[];
+  /** Set on the repeat of a save that answered 409 confirmRequired: 'no_ssh'. */
+  confirmNoSsh?: boolean;
   dns?: boolean;
   relay?: boolean;
   listenPort?: number;

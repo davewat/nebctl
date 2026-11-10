@@ -188,8 +188,20 @@ func (c *Conn) run(s *ssh.Session, cmd string, limit time.Duration) error {
 	case err := <-done:
 		return err
 	case <-timer.C:
-		go s.Close()
-		go c.Close()
+		// Detach the hung client before returning, so the next command
+		// can only redial: closing it later (or closing "whatever
+		// c.client is by then") let the next command open a session on
+		// the dying connection, or closed the fresh one it had dialled.
+		c.mu.Lock()
+		cl := c.client
+		c.client = nil
+		c.mu.Unlock()
+		go func() {
+			s.Close()
+			if cl != nil {
+				cl.Close()
+			}
+		}()
 		return &TimeoutError{Host: c.opts.Host, Limit: limit}
 	}
 }

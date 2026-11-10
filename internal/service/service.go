@@ -72,6 +72,14 @@ func Restart(goos string) error {
 	return run("systemctl", "restart", "nebula")
 }
 
+// RestartCommand is the command an operator runs by hand to restart nebula.
+func RestartCommand(goos string) string {
+	if goos == "darwin" {
+		return "sudo launchctl kickstart -k system/" + launchdLabel
+	}
+	return "sudo systemctl restart nebula"
+}
+
 // Reload makes nebula re-read its config (SIGHUP): firewall, blocklist,
 // logging and stats change without dropping tunnels.
 func Reload(goos string) error {

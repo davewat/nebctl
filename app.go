@@ -32,6 +32,11 @@ type app struct {
 	console   bool                                 // running a console command: never prompt
 	caKey     *caKeyInput                          // the CA key handed in for this run, if any
 	ufwCmd    func(args ...string) (string, error) // set by tests; nil runs the real ufw
+
+	release    func()         // releases the state lock this run holds; nil when none is held
+	svcStatus  func() string  // set by tests; nil asks the real service manager
+	svcRestart func() error   // set by tests; nil restarts the real service
+	settle     *time.Duration // set by tests: how long nebula must stay up after a restart
 }
 
 func (a *app) path(p string) string {
@@ -60,6 +65,73 @@ func (a *app) caDirCrt() string    { return filepath.Join(a.caDir(), "ca.crt") }
 func (a *app) caDirKey() string    { return filepath.Join(a.caDir(), "ca.key") }
 func (a *app) networkFile() string { return filepath.Join(a.caDir(), "network.json") }
 func (a *app) issuedDir() string   { return filepath.Join(a.caDir(), "issued") }
+
+// store is the state under this machine's config dir; its one lock guards
+// nebctl.json and network.json for every nebctl process.
+func (a *app) store() netconf.Store { return netconf.Store{Dir: a.cfgDir()} }
+
+// lockState takes the state lock for a load-modify-save and returns the
+// function that releases it. It is safe to call while this run already holds
+// the lock (the inner call returns a no-op), and the lock can be let go early
+// with releaseState. Hold it only across the load-modify-save: never over a
+// terminal prompt, an SSH round trip or a service restart.
+func (a *app) lockState() (func(), error) {
+	if a.release != nil {
+		return func() {}, nil
+	}
+	unlock, err := a.store().Lock()
+	if err != nil {
+		return nil, err
+	}
+	a.release = unlock
+	return func() { a.releaseState() }, nil
+}
+
+// releaseState lets go of the state lock this run holds, if any.
+func (a *app) releaseState() {
+	if a.release != nil {
+		unlock := a.release
+		a.release = nil
+		unlock()
+	}
+}
+
+// commitNetwork changes network.json under the lock, starting from what is on
+// disk now, not from the copy the caller loaded before it asked questions, so
+// a change made meanwhile by another nebctl is kept. network is replaced with
+// the saved result.
+func (a *app) commitNetwork(network *netconf.Network, change func(*netconf.Network) error) error {
+	unlock, err := a.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	fresh, err := a.loadNetwork()
+	if err != nil {
+		return err
+	}
+	if err := change(fresh); err != nil {
+		return err
+	}
+	if err := fresh.Save(a.networkFile()); err != nil {
+		return err
+	}
+	if network != nil {
+		*network = *fresh
+	}
+	return nil
+}
+
+// saveNewNetwork writes the network.json of a CA being created or imported
+// here, under the state lock.
+func (a *app) saveNewNetwork(n *netconf.Network) error {
+	unlock, err := a.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return n.Save(a.networkFile())
+}
 
 func (a *app) tool() pki.Tool {
 	return pki.Tool{Bin: a.certBin(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
@@ -159,7 +231,10 @@ func (a *app) update(tag string, force bool) error {
 		return err
 	}
 	if a.root == "" && !a.noService && service.Installed(a.goos) {
-		if err := service.Restart(a.goos); err != nil {
+		if err := a.restartService(); err != nil {
+			return err
+		}
+		if err := a.verifyRunning(false, true); err != nil {
 			return err
 		}
 		a.p.Println("Restarted nebula on the new version.")

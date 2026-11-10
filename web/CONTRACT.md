@@ -212,7 +212,7 @@ interface SettingsChange {
 ```
 
 - `GET settings` -> `Settings`
-- `PUT settings` `SettingsChange` -> `{ log: string; restarted: boolean }`.
+- `PUT settings` `SettingsChange` -> `{ log: string; restarted: boolean }`. If `inbound` would remove the last rule letting tcp/22 in, nothing is saved and it answers **409** `{ error, confirmRequired: 'no_ssh', node, message }`; the console asks, then repeats the same change with `confirmNoSsh: true`.
   The new config must pass `nebula -test` first; on failure the old one stays
   and the error says why. On Linux with ufw, the host firewall is brought in
   step too, and the log says what changed (`ufw: allowed ...`).

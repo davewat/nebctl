@@ -322,6 +322,23 @@ func body(r *http.Request, v any) error {
 	return json.Unmarshal(snaked, v)
 }
 
+// confirmRequired recognises nebctl's "nothing was done until you confirm"
+// answer (a confirmRequired key) and shapes it as an error body, so the
+// console shows the message if it does not handle the kind.
+func confirmRequired(obj map[string]any) (map[string]any, bool) {
+	if _, ok := obj["confirmRequired"]; !ok {
+		return nil, false
+	}
+	out := map[string]any{}
+	for k, v := range obj {
+		if k != "log" {
+			out[k] = v
+		}
+	}
+	out["error"] = obj["message"]
+	return out, true
+}
+
 func (c *console) routes() {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/targets", c.listTargets)
@@ -361,6 +378,10 @@ func (c *console) routes() {
 			}
 			v = rekey(v, camel, false)
 			if obj, ok := v.(map[string]any); ok {
+				if ask, yes := confirmRequired(obj); yes {
+					writeJSON(w, http.StatusConflict, ask) // nothing was changed; the console asks, then repeats with a confirm flag
+					return
+				}
 				if after != nil {
 					after(r, obj)
 				}

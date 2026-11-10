@@ -277,6 +277,15 @@ func (a *app) consoleAdminEnable() error {
 	if err := a.requireRoot(); err != nil {
 		return err
 	}
+	// One critical section from the first load to the save: another nebctl
+	// (a parallel console request, the CLI) waits here instead of racing.
+	// Nothing in this command waits on a prompt, and writeConfig lets the
+	// lock go before the restart.
+	unlock, err := a.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	h, ok, err := a.loadHost()
 	if err != nil {
 		return err
@@ -467,6 +476,15 @@ func (a *app) consoleSign(name, ip string, groups []string, groupsGiven bool, re
 	if err := a.requireRoot(); err != nil {
 		return nil, err
 	}
+	// One critical section from the first load to the save: another nebctl
+	// (a parallel console request, the CLI) waits here instead of racing.
+	// Nothing in this command waits on a prompt, and writeConfig lets the
+	// lock go before the restart.
+	unlock, err := a.lockState()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	network, err := a.loadNetwork()
 	if err != nil {
 		return nil, err
@@ -533,10 +551,19 @@ func (a *app) consoleRevoke(fp string) (map[string]any, error) {
 	if err := a.requireRoot(); err != nil {
 		return nil, err
 	}
+	// One critical section from the first load to the save: another nebctl
+	// (a parallel console request, the CLI) waits here instead of racing.
+	// Nothing in this command waits on a prompt, and writeConfig lets the
+	// lock go before the restart.
+	unlock, err := a.lockState()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if strings.TrimSpace(fp) == "" {
 		return nil, errors.New("give the cert's fingerprint with -fingerprint")
 	}
-	fp, err := netconf.ValidFingerprint(fp)
+	fp, err = netconf.ValidFingerprint(fp)
 	if err != nil {
 		return nil, err
 	}
@@ -575,6 +602,15 @@ func (a *app) consoleBlocklist(fps []string) error {
 	if err := a.requireRoot(); err != nil {
 		return err
 	}
+	// One critical section from the first load to the save: another nebctl
+	// (a parallel console request, the CLI) waits here instead of racing.
+	// Nothing in this command waits on a prompt, and writeConfig lets the
+	// lock go before the restart.
+	unlock, err := a.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	h, ok, err := a.loadHost()
 	if err != nil {
 		return err
@@ -628,13 +664,16 @@ func (a *app) consoleSettings() error {
 }
 
 type settingsChange struct {
-	Inbound     *[]netconf.Rule       `json:"inbound"`
-	DNS         *bool                 `json:"dns"`
-	Relay       *bool                 `json:"relay"`
-	ListenPort  *int                  `json:"listen_port"`
-	Lighthouses *[]netconf.Lighthouse `json:"lighthouses"`
-	Resolve     *bool                 `json:"resolve"`
-	Logging     *struct {
+	Inbound *[]netconf.Rule `json:"inbound"`
+	// ConfirmNoSSH is the operator's yes to an inbound rule set that no
+	// longer lets tcp/22 in, after a first save answered confirm_required.
+	ConfirmNoSSH bool                  `json:"confirm_no_ssh"`
+	DNS          *bool                 `json:"dns"`
+	Relay        *bool                 `json:"relay"`
+	ListenPort   *int                  `json:"listen_port"`
+	Lighthouses  *[]netconf.Lighthouse `json:"lighthouses"`
+	Resolve      *bool                 `json:"resolve"`
+	Logging      *struct {
 		Level  string `json:"level"`
 		Format string `json:"format"`
 	} `json:"logging"`
@@ -647,6 +686,15 @@ func (a *app) consoleConfigure(raw string) (map[string]any, error) {
 	if err := a.requireRoot(); err != nil {
 		return nil, err
 	}
+	// One critical section from the first load to the save: another nebctl
+	// (a parallel console request, the CLI) waits here instead of racing.
+	// Nothing in this command waits on a prompt, and writeConfig lets the
+	// lock go before the restart.
+	unlock, err := a.lockState()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	var ch settingsChange
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -667,6 +715,16 @@ func (a *app) consoleConfigure(raw string) (map[string]any, error) {
 			if err := checkRule(r); err != nil {
 				return nil, err
 			}
+		}
+		// Dropping the last rule that lets SSH in over Nebula can lock the
+		// operator out of a machine they reach only over Nebula: ask first,
+		// writing nothing, and go ahead only on a repeat with confirm_no_ssh.
+		if netconf.OpensSSH(h.Inbound) && !netconf.OpensSSH(*ch.Inbound) && !ch.ConfirmNoSSH {
+			return map[string]any{
+				"confirm_required": "no_ssh",
+				"node":             h.Name,
+				"message":          noSSHWarning(h.Name),
+			}, nil
 		}
 		h.Inbound = *ch.Inbound
 	}
@@ -745,6 +803,12 @@ func (a *app) consoleConfigure(raw string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"restarted": restart}, nil
+}
+
+// noSSHWarning is what the console and the CLI say before saving inbound
+// rules that no longer let SSH in over Nebula.
+func noSSHWarning(node string) string {
+	return "This removes SSH over Nebula to " + node + ". If you reach it only over Nebula you will be locked out."
 }
 
 func checkRule(r netconf.Rule) error {

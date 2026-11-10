@@ -128,7 +128,7 @@ func (a *app) caInit(noPassphrase bool) error {
 		return err
 	}
 	network := &netconf.Network{CIDR: prefix.String(), Domain: domain}
-	if err := network.Save(a.networkFile()); err != nil {
+	if err := a.saveNewNetwork(network); err != nil {
 		return err
 	}
 	certs, err := a.tool().Inspect(a.caDirCrt())
@@ -248,7 +248,7 @@ func (a *app) caImport(crtPath, keyPath string) error {
 		}
 		network.Record(f)
 	}
-	if err := network.Save(a.networkFile()); err != nil {
+	if err := a.saveNewNetwork(network); err != nil {
 		return err
 	}
 	a.p.Printf("\nImported CA %q (%s), valid until %s.\n", ca.Name, cidr, ca.NotAfter.Format("2006-01-02"))
@@ -379,6 +379,23 @@ func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string
 	if err := a.tool().Sign(opts); err != nil {
 		return pki.Cert{}, "", err
 	}
+	// The CA key prompt and nebula-cert's passphrase prompt are over. From here
+	// to the save is one critical section: start again from the network as it
+	// is on disk now (another sign may have run while we asked questions), make
+	// sure the address is still free, then put the cert in place and record it.
+	// A cert signed for an address someone else just took is discarded unrecorded.
+	unlock, err := a.lockState()
+	if err != nil {
+		return pki.Cert{}, "", err
+	}
+	defer unlock()
+	fresh, err := a.loadNetwork()
+	if err != nil {
+		return pki.Cert{}, "", err
+	}
+	if owner, used := fresh.Owner(ip.Addr()); used && owner != name && owner != r.replaces {
+		return pki.Cert{}, "", fmt.Errorf("%s was given to %s by another nebctl while this cert was being signed; nothing was recorded, so run it again", ip.Addr(), owner)
+	}
 	if err := os.Rename(opts.OutCrt, crt); err != nil {
 		return pki.Cert{}, "", err
 	}
@@ -393,11 +410,12 @@ func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string
 	if r.replaces != "" {
 		os.Remove(filepath.Join(a.issuedDir(), r.replaces+".crt"))
 	}
-	network.RecordReplacing(r.replaces, netconf.Issued{Name: name, NebulaIP: ip.String(), Groups: groups,
+	fresh.RecordReplacing(r.replaces, netconf.Issued{Name: name, NebulaIP: ip.String(), Groups: groups,
 		Fingerprint: c.Fingerprint, NotAfter: c.NotAfter, IssuedAt: time.Now().UTC().Truncate(time.Second)})
-	if err := network.Save(a.networkFile()); err != nil {
+	if err := fresh.Save(a.networkFile()); err != nil {
 		return pki.Cert{}, "", err
 	}
+	*network = *fresh
 	a.p.Printf("Signed %s as %s, valid until %s.\n", name, ip, c.NotAfter.Format("2006-01-02"))
 	if r.replaces != "" {
 		a.p.Printf("It replaces %s, which is no longer recorded.\n", r.replaces)
@@ -416,15 +434,21 @@ func (a *app) ensureLighthouses(network *netconf.Network) error {
 	if err != nil || !ok {
 		return err
 	}
+	var added []netconf.Lighthouse // asked unlocked, saved together
 	for {
 		l, err := a.askLighthouse("")
 		if err != nil {
 			return err
 		}
-		network.Lighthouses = netconf.AddLighthouse(network.Lighthouses, l)
+		added = append(added, l)
 		if more, err := a.p.Confirm("Record another lighthouse?", false); err != nil || !more {
 			if err == nil {
-				err = network.Save(a.networkFile())
+				err = a.commitNetwork(network, func(n *netconf.Network) error {
+					for _, l := range added {
+						n.Lighthouses = netconf.AddLighthouse(n.Lighthouses, l)
+					}
+					return nil
+				})
 			}
 			return err
 		}
@@ -471,8 +495,10 @@ func (a *app) caLighthouse() error {
 	if err != nil {
 		return err
 	}
-	network.Lighthouses = netconf.AddLighthouse(network.Lighthouses, l)
-	if err := network.Save(a.networkFile()); err != nil {
+	if err := a.commitNetwork(network, func(n *netconf.Network) error {
+		n.Lighthouses = netconf.AddLighthouse(n.Lighthouses, l)
+		return nil
+	}); err != nil {
 		return err
 	}
 	a.p.Printf("Recorded lighthouse %s. Hosts set up before this need `sudo nebctl node` again to learn it.\n", l)
@@ -669,9 +695,11 @@ func (a *app) caBundle(crtPath, keyPath, out string) error {
 		return err
 	}
 	if len(c.Networks) > 0 {
-		network.Record(netconf.Issued{Name: c.Name, NebulaIP: c.Networks[0], Groups: c.Groups,
-			Fingerprint: c.Fingerprint, NotAfter: c.NotAfter, IssuedAt: c.NotBefore})
-		if err := network.Save(a.networkFile()); err != nil {
+		if err := a.commitNetwork(network, func(n *netconf.Network) error {
+			n.Record(netconf.Issued{Name: c.Name, NebulaIP: c.Networks[0], Groups: c.Groups,
+				Fingerprint: c.Fingerprint, NotAfter: c.NotAfter, IssuedAt: c.NotBefore})
+			return nil
+		}); err != nil {
 			return err
 		}
 	}

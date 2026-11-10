@@ -21,6 +21,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/davewat/nebctl/internal/keep"
 )
 
 // DefaultRepo publishes nebula's official releases. DefinedNet/nebula
@@ -167,7 +169,9 @@ func Download(ctx context.Context, c *http.Client, rel *Release, asset, dir stri
 }
 
 // Install copies the binaries into binDir, each replaced in one rename so a
-// running nebula keeps its old file until it restarts.
+// running nebula keeps its old file until it restarts. A binary it replaces
+// is first kept as <name>.prev (not when the new file is identical), so an
+// operator can put the old version back by hand.
 func Install(files map[string]string, binDir string) error {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return err
@@ -177,6 +181,10 @@ func Install(files map[string]string, binDir string) error {
 		tmp := filepath.Join(binDir, "."+name+".new")
 		if err := copyFile(files[name], tmp, 0o755); err != nil {
 			return err
+		}
+		if _, err := keep.PreviousUnlessSame(dst, tmp); err != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("keeping the old %s as %s: %w", name, keep.Prev(dst), err)
 		}
 		if err := os.Rename(tmp, dst); err != nil {
 			os.Remove(tmp)

@@ -136,7 +136,9 @@ To update nebctl itself, repeat the `curl` and `install` lines from step 2.
 | Path | What |
 |---|---|
 | `/usr/local/bin/nebula`, `nebula-cert` | nebula |
-| `/etc/nebula/config.yml` | nebula's config, written by nebctl |
+| `/etc/nebula/config.yml` | nebula's config, written by nebctl; the one before it is `config.yml.prev` (`sudo nebctl restore-config` puts it back) |
+| `/usr/local/bin/nebula.prev`, `nebula-cert.prev` | the binaries `update` replaced, kept for putting back by hand |
+| `/etc/nebula/.nebctl.lock` | the lock every nebctl takes while it changes `nebctl.json` or `network.json` |
 | `/etc/nebula/nebctl.json` | your answers; `sudo nebctl config` rewrites the config from it |
 | `/etc/nebula/ca/` | the CA, on the lighthouse |
 | `/etc/nebula/admin/` | keys for the admin console |
