@@ -210,17 +210,22 @@ func (a *app) install(tag string, force bool) (changed bool, err error) {
 	}
 	defer os.RemoveAll(tmp)
 	a.p.Printf("Downloading nebula %s (%s)...\n", rel.Version(), asset)
-	files, err := release.Download(ctx, a.http, rel, asset, tmp)
+	files, pinned, err := release.Download(ctx, a.http, rel, asset, tmp)
 	if err != nil {
 		return false, err
+	}
+	checked := "checksum pinned in nebctl verified"
+	if !pinned {
+		checked = "checked only against the release's own SHASUM256.txt"
+		a.p.Printf("WARNING: nebula %s is not pinned in this nebctl, so its archive was checked only against the SHASUM256.txt published beside it (that detects corruption, not tampering). Compare it with the release notes, or use a nebctl that pins it.\n", rel.Version())
 	}
 	if err := release.Install(files, a.binDir()); err != nil {
 		return false, fmt.Errorf("installing into %s: %w", a.binDir(), err)
 	}
 	if cur == "" {
-		a.p.Printf("Installed nebula %s into %s (checksums verified).\n", rel.Version(), a.binDir())
+		a.p.Printf("Installed nebula %s into %s (%s).\n", rel.Version(), a.binDir(), checked)
 	} else {
-		a.p.Printf("Updated nebula %s -> %s in %s (checksums verified).\n", cur, rel.Version(), a.binDir())
+		a.p.Printf("Updated nebula %s -> %s in %s (%s).\n", cur, rel.Version(), a.binDir(), checked)
 	}
 	return true, nil
 }

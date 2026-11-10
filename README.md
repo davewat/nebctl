@@ -149,7 +149,36 @@ To update nebctl itself, repeat the `curl` and `install` lines from step 2.
 
 ```bash
 make test      # Go tests
-make release   # CLI binaries, the Mac app and SHA256SUMS in dist/
+make release   # CLI binaries, the Mac app, SHA256SUMS and SHA256SUMS.sig in dist/
 make web       # rebuild the console (web/) into internal/web/dist
 make mac-test  # the Mac app's tests
 ```
+
+### Releasing
+
+1. `make release` builds `dist/` and writes `dist/SHA256SUMS`, then signs it with
+   `solidctl sign` (found on PATH, or run from `~/src/solidkit`) to make
+   `dist/SHA256SUMS.sig`. If it prints `UNSIGNED`, fix that before uploading.
+2. Upload **everything** in `dist/` to the GitHub release, including
+   `SHA256SUMS` **and** `SHA256SUMS.sig`.
+
+When the console installs or updates nebctl on a machine over SSH, it
+downloads the release itself and verifies `SHA256SUMS` against the release key
+pinned in `internal/relsig` before trusting any hash in it. A release without a
+`.sig` (every release before signing began) is refused until you confirm in the
+console; one whose `.sig` does not verify is refused with no override.
+
+### Adding a Nebula version
+
+Nebula's own releases are not signed, so nebctl pins SHA-256 checksums of the
+archives it installs in `internal/release/pinned.go`. A version in the table must
+match it; a version not in it still installs, using the `SHASUM256.txt` from the
+same release, with a warning that it is not pinned. To pin a new one:
+
+```bash
+gh release download vX.Y.Z -R slackhq/nebula -p SHASUM256.txt -D "$(mktemp -d)"
+```
+
+Copy the lines for the archives `AssetName` can ask for (`nebula-darwin.zip`,
+`nebula-linux-*.tar.gz`) into a new `"vX.Y.Z"` block, and update the comment
+with the date and source.

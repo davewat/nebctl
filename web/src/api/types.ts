@@ -22,6 +22,8 @@ export interface ConnectBody {
   passphrase?: string;
   sudoPassword?: string;
   acceptHostKey?: string;
+  // set only after the operator confirms installing a nebctl release that has no signature
+  allowUnsigned?: boolean;
 }
 
 export interface HostKeyInfo {

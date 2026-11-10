@@ -9,6 +9,7 @@ type Stage =
   | { kind: 'form' }
   | { kind: 'hostkey'; info: HostKeyInfo }
   | { kind: 'install'; info: MissingNebctl }
+  | { kind: 'unsigned'; info: MissingNebctl }
   | { kind: 'savekey'; target: Target; saved?: string };
 
 const NEED_TEXT: Record<NeedField, string> = {
@@ -53,19 +54,23 @@ export function ConnectDialog({ onClose, onConnected }: { onClose: () => void; o
     return b;
   };
 
-  const run = async (call: (b: ConnectBody) => Promise<Target>, accept?: string) => {
+  const run = async (call: (b: ConnectBody) => Promise<Target>, accept?: string, unsigned?: boolean) => {
     setBusy(true);
     setError(null);
     setNeed(null);
     try {
-      const t = await call(body(accept));
+      const b = body(accept);
+      if (unsigned) b.allowUnsigned = true;
+      const t = await call(b);
       if (t.canSaveKey) setStage({ kind: 'savekey', target: t });
       else onConnected(t);
     } catch (e) {
       if (e instanceof ApiError) {
-        const b = e.body as { hostKey?: HostKeyInfo } & Partial<MissingNebctl>;
+        const b = e.body as { hostKey?: HostKeyInfo; unsignedRelease?: boolean } & Partial<MissingNebctl>;
         if (e.status === 409 && b?.hostKey) {
           setStage({ kind: 'hostkey', info: b.hostKey });
+        } else if (e.status === 412 && b?.unsignedRelease) {
+          setStage({ kind: 'unsigned', info: b as MissingNebctl });
         } else if (e.status === 428 && b?.nebctl) {
           setStage({ kind: 'install', info: b as MissingNebctl });
         } else if (e.status === 401 && e.need) {
@@ -214,6 +219,34 @@ export function ConnectDialog({ onClose, onConnected }: { onClose: () => void; o
             ? `${hostLabel} has nebctl ${info.remoteVersion ?? 'of an older version'}; this console is ${info.version}.`
             : `${hostLabel} has no nebctl, and the console needs it there to manage nebula.`}{' '}
           Installing copies this release ({info.version}, {info.arch}) to <span className="mono">/usr/local/bin/nebctl</span> over SSH.
+        </p>
+        <ErrorText>{error}</ErrorText>
+      </Dialog>
+    );
+  }
+
+  if (stage.kind === 'unsigned') {
+    const { info } = stage;
+    return (
+      <Dialog
+        title="This nebctl release isn't signed"
+        onClose={onClose}
+        busy={busy}
+        footer={
+          <>
+            <Button onClick={() => setStage({ kind: 'form' })} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="primary" busy={busy} onClick={() => void run(api.install, undefined, true)}>
+              Install unsigned nebctl on {hostLabel}
+            </Button>
+          </>
+        }
+      >
+        <p>
+          The release for nebctl {info.version} ({info.arch}) has no signature, so nothing proves it is the build its
+          author published; only a checksum from the same download checks it. Install it on {hostLabel} only if you trust
+          where it came from. A release whose signature is present but wrong is refused outright, and cannot be installed.
         </p>
         <ErrorText>{error}</ErrorText>
       </Dialog>

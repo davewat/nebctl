@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -30,6 +32,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/davewat/nebctl/internal/relsig"
 	"github.com/davewat/nebctl/internal/remote"
 	"github.com/davewat/nebctl/internal/web"
 )
@@ -687,7 +690,8 @@ func (c *console) dropTarget(w http.ResponseWriter, r *http.Request) {
 func (c *console) addTarget(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		remote.Options
-		Install bool `json:"install"`
+		Install       bool `json:"install"`
+		AllowUnsigned bool `json:"allowUnsigned"`
 	}
 	if err := body(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -742,7 +746,12 @@ func (c *console) addTarget(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusPreconditionRequired, body)
 			return
 		}
-		bin, err := c.nebctlBinary(r.Context(), goos, goarch)
+		bin, err := c.nebctlBinary(r.Context(), goos, goarch, in.AllowUnsigned)
+		if errors.Is(err, errUnsignedRelease) {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]any{"error": "nebctl " + version + " has no signature: its release has no SHA256SUMS.sig, so nothing proves it is the real build. Install it only if you trust the release.",
+				"unsignedRelease": true, "version": version, "arch": goos + "/" + goarch})
+			return
+		}
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, err)
 			return
@@ -837,8 +846,9 @@ func versionState(remoteV, localV string) string {
 
 // nebctlBinary finds this version of nebctl for another platform: this
 // binary, a copy beside it (the Mac app carries Linux builds), $NEBCTL_DIST,
-// or the GitHub release, checked against its SHA256SUMS.
-func (c *console) nebctlBinary(ctx context.Context, goos, goarch string) ([]byte, error) {
+// or the GitHub release, whose SHA256SUMS must carry a valid signature
+// (see fetchNebctlRelease).
+func (c *console) nebctlBinary(ctx context.Context, goos, goarch string, allowUnsigned bool) ([]byte, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -859,39 +869,85 @@ func (c *console) nebctlBinary(ctx context.Context, goos, goarch string) ([]byte
 		return nil, fmt.Errorf("this nebctl (%s) is a development build: put %s beside it, or set NEBCTL_DIST to a folder holding it (make dist)", version, name)
 	}
 	base := "https://github.com/" + nebctlRepo + "/releases/download/" + version + "/"
+	// This machine (the one running the console) downloads; the bytes are
+	// then pushed to the host over SSH. A host never downloads nebctl itself.
+	bin, unsigned, err := fetchNebctlRelease(ctx, c.a.http, base, name, relsig.Pinned(), allowUnsigned)
+	if err != nil {
+		return nil, err
+	}
+	if unsigned {
+		log.Printf("nebctl: %s %s installed WITHOUT a signature check (the release has no SHA256SUMS.sig; the operator allowed it)", name, version)
+	}
+	return bin, nil
+}
+
+// errUnsignedRelease means the release has no SHA256SUMS.sig. The console
+// turns it into a confirm step; a signature that is present but wrong is
+// never this error and never overridable.
+var errUnsignedRelease = errors.New("this release is not signed (it has no SHA256SUMS.sig)")
+
+type statusError struct {
+	URL  string
+	Code int
+	Text string
+}
+
+func (e *statusError) Error() string { return e.URL + ": " + e.Text }
+
+// fetchNebctlRelease downloads SHA256SUMS, its .sig and the binary `name`
+// from base. SHA256SUMS is verified against pub before any hash in it is
+// trusted; the binary is then checked against it. A missing .sig returns
+// errUnsignedRelease unless allowUnsigned, in which case unsigned is true and
+// the hash check still runs. A present .sig that does not verify always fails.
+func fetchNebctlRelease(ctx context.Context, hc *http.Client, base, name string, pub ed25519.PublicKey, allowUnsigned bool) (bin []byte, unsigned bool, err error) {
 	get := func(u string) ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.a.http.Do(req)
+		resp, err := hc.Do(req)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s: %s", u, resp.Status)
+			return nil, &statusError{u, resp.StatusCode, resp.Status}
 		}
 		return io.ReadAll(io.LimitReader(resp.Body, 100<<20))
 	}
 	sums, err := get(base + "SHA256SUMS")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	bin, err := get(base + name)
+	sig, err := get(base + "SHA256SUMS.sig")
+	var se *statusError
+	switch {
+	case err == nil:
+		if err := relsig.Verify(pub, sums, sig); err != nil {
+			return nil, false, fmt.Errorf("refusing %s: SHA256SUMS.sig does not verify against nebctl's pinned release key (%w); this cannot be overridden", name, err)
+		}
+	case errors.As(err, &se) && se.Code == http.StatusNotFound:
+		if !allowUnsigned {
+			return nil, false, errUnsignedRelease
+		}
+		unsigned = true
+	default:
+		return nil, false, err
+	}
+	bin, err = get(base + name)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	sum := sha256.Sum256(bin)
 	for _, l := range strings.Split(string(sums), "\n") {
 		if f := strings.Fields(l); len(f) == 2 && f[1] == name {
 			if f[0] != hex.EncodeToString(sum[:]) {
-				return nil, fmt.Errorf("%s doesn't match the release's SHA256SUMS", name)
+				return nil, false, fmt.Errorf("%s doesn't match the release's SHA256SUMS", name)
 			}
-			return bin, nil
+			return bin, unsigned, nil
 		}
 	}
-	return nil, fmt.Errorf("%s isn't in the release's SHA256SUMS", name)
+	return nil, false, fmt.Errorf("%s isn't in the release's SHA256SUMS", name)
 }
 
 // Key case: nebctl's JSON is snake_case, the console's camelCase.

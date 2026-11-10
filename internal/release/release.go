@@ -114,58 +114,75 @@ func ParseShasums(data []byte) map[string]string {
 	return sums
 }
 
-// Download fetches asset from rel, checks it and the binaries inside it
-// against SHASUM256.txt, and extracts the binaries into dir. It returns
-// binary name -> extracted path.
-func Download(ctx context.Context, c *http.Client, rel *Release, asset, dir string) (map[string]string, error) {
-	sumsURL, ok := rel.Assets["SHASUM256.txt"]
-	if !ok {
-		return nil, fmt.Errorf("release %s has no SHASUM256.txt; refusing to install unchecked binaries", rel.Tag)
-	}
+// Download fetches asset from rel and extracts the binaries into dir. It
+// returns binary name -> extracted path, and whether the archive was checked
+// against a checksum pinned in this source (pinned.go).
+//
+// A tag in pinnedSums must match its pinned hash; the release's own
+// SHASUM256.txt is then not read at all, so an attacker who can replace the
+// archive and that file together still fails. A tag that is not pinned falls
+// back to the release's SHASUM256.txt (corruption detection only), and the
+// caller is told with pinned == false so it can warn.
+func Download(ctx context.Context, c *http.Client, rel *Release, asset, dir string) (files map[string]string, pinned bool, err error) {
 	assetURL, ok := rel.Assets[asset]
 	if !ok {
-		return nil, fmt.Errorf("release %s has no %s", rel.Tag, asset)
+		return nil, false, fmt.Errorf("release %s has no %s", rel.Tag, asset)
 	}
-	sumsData, err := fetch(ctx, c, sumsURL, 1<<20)
-	if err != nil {
-		return nil, fmt.Errorf("downloading SHASUM256.txt: %w", err)
-	}
-	sums := ParseShasums(sumsData)
-	want, ok := sums[asset]
-	if !ok {
-		return nil, fmt.Errorf("SHASUM256.txt has no entry for %s", asset)
+	var want string
+	var sums map[string]string
+	if p, ok := pinnedSums[rel.Tag]; ok {
+		if want, ok = p[asset]; !ok {
+			return nil, false, fmt.Errorf("nebula %s is pinned but has no pinned checksum for %s; refusing", rel.Tag, asset)
+		}
+		pinned = true
+	} else {
+		sumsURL, ok := rel.Assets["SHASUM256.txt"]
+		if !ok {
+			return nil, false, fmt.Errorf("release %s has no SHASUM256.txt; refusing to install unchecked binaries", rel.Tag)
+		}
+		sumsData, err := fetch(ctx, c, sumsURL, 1<<20)
+		if err != nil {
+			return nil, false, fmt.Errorf("downloading SHASUM256.txt: %w", err)
+		}
+		sums = ParseShasums(sumsData)
+		if want, ok = sums[asset]; !ok {
+			return nil, false, fmt.Errorf("SHASUM256.txt has no entry for %s", asset)
+		}
 	}
 
 	archive := filepath.Join(dir, asset)
 	got, err := download(ctx, c, assetURL, archive)
 	if err != nil {
-		return nil, fmt.Errorf("downloading %s: %w", asset, err)
+		return nil, false, fmt.Errorf("downloading %s: %w", asset, err)
 	}
 	if got != want {
-		return nil, fmt.Errorf("%s checksum mismatch: got %s, want %s", asset, got, want)
+		src := "the release's SHASUM256.txt"
+		if pinned {
+			src = "the checksum pinned in nebctl"
+		}
+		return nil, false, fmt.Errorf("%s checksum mismatch against %s: got %s, want %s", asset, src, got, want)
 	}
 
-	var files map[string]string
 	if strings.HasSuffix(asset, ".zip") {
 		files, err = extractZip(archive, dir)
 	} else {
 		files, err = extractTarGz(archive, dir)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("unpacking %s: %w", asset, err)
+		return nil, false, fmt.Errorf("unpacking %s: %w", asset, err)
 	}
 	for _, name := range Binaries {
 		p, ok := files[name]
 		if !ok {
-			return nil, fmt.Errorf("%s has no %s", asset, name)
+			return nil, false, fmt.Errorf("%s has no %s", asset, name)
 		}
 		if want, ok := sums[asset+"/"+name]; ok {
 			if got, err := fileSHA256(p); err != nil || got != want {
-				return nil, fmt.Errorf("%s/%s checksum mismatch", asset, name)
+				return nil, false, fmt.Errorf("%s/%s checksum mismatch", asset, name)
 			}
 		}
 	}
-	return files, nil
+	return files, pinned, nil
 }
 
 // Install copies the binaries into binDir, each replaced in one rename so a
