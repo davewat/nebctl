@@ -36,6 +36,8 @@ export function CertsPage() {
   return <CertsInner key={target.id} />;
 }
 
+type Revocable = Pick<IssuedCert, 'name' | 'nebulaIp' | 'fingerprint'>;
+
 type Bundle = { signed: Signed; hasKey: boolean; renewal: boolean };
 
 /** Resolves true once the CA key can be used: on disk there, or pasted. */
@@ -48,7 +50,7 @@ function CertsInner() {
   const certs = useResource(() => api.certs(target.id), [target.id]);
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [renewing, setRenewing] = useState<IssuedCert | null>(null);
-  const [revoking, setRevoking] = useState<IssuedCert | null>(null);
+  const [revoking, setRevoking] = useState<Revocable | null>(null);
   const [pushing, setPushing] = useState<{ name: string; blocklist: string[] } | null>(null);
   const [nextIp, setNextIp] = useState('');
   const [askKey, setAskKey] = useState<((ok: boolean) => void) | null>(null);
@@ -201,6 +203,43 @@ function CertsInner() {
               {c.issued.length === 0 && <Empty>No certs have been signed yet. Sign one for the first host below.</Empty>}
             </div>
           </Panel>
+
+          {!!c.superseded?.length && (
+            <Panel title="Superseded certificates" sub="A renewal or rename leaves the old cert working until it expires. Revoke one that should stop working now.">
+              <div className="table-wrap flush">
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th scope="col">Name</th>
+                      <th scope="col">Address</th>
+                      <th scope="col">Expires</th>
+                      <th scope="col">State</th>
+                      <th scope="col"><span className="sr-only">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {c.superseded.map((s) => (
+                      <tr key={s.fingerprint}>
+                        <td>{shortName(s.name)}<span className="sub-line">replaced by {shortName(s.current)}, {fmtDate(s.supersededAt)}</span></td>
+                        <td className="mono">{s.nebulaIp}</td>
+                        <td>{s.notAfter ? fmtDate(s.notAfter) : <span className="dim">Unknown</span>}</td>
+                        <td>
+                          {s.revoked ? (
+                            <span className="pill"><span className="dot dot-revoked" aria-hidden="true" />Revoked</span>
+                          ) : (
+                            <span className="pill dim"><span className="dot dot-off" aria-hidden="true" />Superseded</span>
+                          )}
+                        </td>
+                        <td className="right actions-cell">
+                          {!s.revoked && <Button small variant="danger" onClick={() => setRevoking(s)}>Revoke</Button>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          )}
 
           <div className="two-col">
             <SignForm nextIp={nextIp} ipError={ipTask.error} ensureKey={ensureKey} onSigned={(s) => onSigned(s, true)} />
@@ -395,7 +434,7 @@ function RenewDialog({ cert, onClose, onSigned }: { cert: IssuedCert; onClose: (
   );
 }
 
-function RevokeDialog({ cert, onClose, onRevoked }: { cert: IssuedCert; onClose: () => void; onRevoked: (blocklist: string[]) => void }) {
+function RevokeDialog({ cert, onClose, onRevoked }: { cert: Revocable; onClose: () => void; onRevoked: (blocklist: string[]) => void }) {
   const { target } = useConsole();
   const task = useTask();
   return (

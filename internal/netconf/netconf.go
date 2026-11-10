@@ -145,6 +145,26 @@ type Issued struct {
 	Fingerprint string    `json:"fingerprint"`
 	NotAfter    time.Time `json:"not_after"`
 	IssuedAt    time.Time `json:"issued_at"`
+	// History holds the certs this entry's host had before, newest last.
+	// A renewal or rename leaves the old cert working until it expires, so
+	// its fingerprint is kept here to stay revocable. Absent in older files.
+	History []Superseded `json:"history,omitempty"`
+}
+
+// Superseded is a cert a newer one replaced. NotAfter and IssuedAt are zero
+// when not known.
+type Superseded struct {
+	Name         string    `json:"name"` // the name it was issued for
+	NebulaIP     string    `json:"nebula_ip"`
+	Fingerprint  string    `json:"fingerprint"`
+	IssuedAt     time.Time `json:"issued_at,omitzero"`
+	NotAfter     time.Time `json:"not_after,omitzero"`
+	SupersededAt time.Time `json:"superseded_at"`
+}
+
+// Expired reports whether the cert's expiry is known and past.
+func (s Superseded) Expired(now time.Time) bool {
+	return !s.NotAfter.IsZero() && now.After(s.NotAfter)
 }
 
 // Network is the CA's record: the address range, the lighthouses every
@@ -156,7 +176,29 @@ type Network struct {
 	Issued      []Issued     `json:"issued"`
 }
 
+// Record stores i, replacing the entry with the same name. The replaced
+// cert, if its fingerprint differs, moves into i's History.
 func (n *Network) Record(i Issued) {
+	n.RecordReplacing("", i)
+}
+
+// RecordReplacing is Record for a cert that also takes over from the entry
+// named replaces (a rename), which is dropped; its cert goes into History
+// the same way.
+func (n *Network) RecordReplacing(replaces string, i Issued) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, name := range []string{i.Name, replaces} {
+		if name == "" {
+			continue
+		}
+		if old, ok := n.Find(name); ok {
+			i.History = mergeHistory(i.History, old, i.Fingerprint, now)
+			if name != i.Name {
+				n.Remove(name)
+			}
+		}
+	}
+	i.History = pruneHistory(i.History, now)
 	for k := range n.Issued {
 		if n.Issued[k].Name == i.Name {
 			n.Issued[k] = i
@@ -165,6 +207,57 @@ func (n *Network) Record(i Issued) {
 	}
 	n.Issued = append(n.Issued, i)
 }
+
+// mergeHistory adds old's own history and old itself (unless it is the cert
+// now being recorded) to h, skipping fingerprints already there.
+func mergeHistory(h []Superseded, old Issued, current string, now time.Time) []Superseded {
+	add := func(s Superseded) {
+		if s.Fingerprint == "" || s.Fingerprint == current {
+			return
+		}
+		for _, e := range h {
+			if e.Fingerprint == s.Fingerprint {
+				return
+			}
+		}
+		h = append(h, s)
+	}
+	for _, s := range old.History {
+		add(s)
+	}
+	add(Superseded{Name: old.Name, NebulaIP: old.NebulaIP, Fingerprint: old.Fingerprint,
+		IssuedAt: old.IssuedAt, NotAfter: old.NotAfter, SupersededAt: now})
+	return h
+}
+
+func pruneHistory(h []Superseded, now time.Time) []Superseded {
+	var out []Superseded
+	for _, s := range h {
+		if !s.Expired(now) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// Prune drops history entries whose cert has expired.
+func (n *Network) Prune(now time.Time) {
+	for k := range n.Issued {
+		n.Issued[k].History = pruneHistory(n.Issued[k].History, now)
+	}
+}
+
+// ValidFingerprint checks s is a nebula cert fingerprint (SHA-256, 64 hex
+// digits) and returns it lowercased.
+func ValidFingerprint(s string) (string, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if !fingerprintRe.MatchString(s) {
+		return "", errors.New("a fingerprint is 64 hexadecimal characters (the SHA-256 shown for the cert)")
+	}
+	return s, nil
+}
+
+var fingerprintRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (n *Network) Find(name string) (Issued, bool) {
 	for _, i := range n.Issued {

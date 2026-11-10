@@ -1,8 +1,10 @@
 package netconf
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNextFreeSkipsIssuedAndNetworkAddress(t *testing.T) {
@@ -142,5 +144,68 @@ func TestRenderLighthouseLeavesItselfOutOfStaticHosts(t *testing.T) {
 	}
 	if strings.Contains(got, "hosts:") {
 		t.Errorf("a lighthouse lists lighthouse hosts:\n%s", got)
+	}
+}
+
+// Guards the 2026-11 gap: renewing or renaming a cert dropped the old
+// fingerprint, so the superseded cert (still valid until it expired) could
+// no longer be revoked.
+func TestRecordKeepsSupersededFingerprints(t *testing.T) {
+	soon := time.Now().Add(24 * time.Hour)
+	n := &Network{CIDR: "10.0.0.0/24"}
+	n.Record(Issued{Name: "a.x", NebulaIP: "10.0.0.2/24", Fingerprint: "f1", NotAfter: soon})
+	n.Record(Issued{Name: "a.x", NebulaIP: "10.0.0.2/24", Fingerprint: "f2", NotAfter: soon})
+	// A rename: the old name goes away, its certs follow the new entry.
+	n.RecordReplacing("a.x", Issued{Name: "a.y", NebulaIP: "10.0.0.2/24", Fingerprint: "f3", NotAfter: soon})
+	if len(n.Issued) != 1 {
+		t.Fatalf("issued = %+v", n.Issued)
+	}
+	h := n.Issued[0].History
+	if len(h) != 2 || h[0].Fingerprint != "f1" || h[1].Fingerprint != "f2" || h[1].Name != "a.x" || h[1].SupersededAt.IsZero() {
+		t.Fatalf("history = %+v", h)
+	}
+	// Recording the same cert again adds nothing.
+	n.Record(Issued{Name: "a.y", NebulaIP: "10.0.0.2/24", Fingerprint: "f3", NotAfter: soon})
+	if len(n.Issued[0].History) != 2 {
+		t.Fatalf("history after a re-record = %+v", n.Issued[0].History)
+	}
+}
+
+func TestHistoryPrunesExpiredOnly(t *testing.T) {
+	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	n := &Network{Issued: []Issued{{Name: "a", Fingerprint: "f9", History: []Superseded{
+		{Fingerprint: "old", NotAfter: past}, {Fingerprint: "new", NotAfter: future}, {Fingerprint: "unknown"}}}}}
+	n.Prune(time.Now())
+	h := n.Issued[0].History
+	if len(h) != 2 || h[0].Fingerprint != "new" || h[1].Fingerprint != "unknown" {
+		t.Fatalf("history = %+v", h)
+	}
+}
+
+// Files written before history existed load with none, and a cert without
+// history does not write the field.
+func TestHistoryBackwardCompatible(t *testing.T) {
+	var n Network
+	if err := json.Unmarshal([]byte(`{"cidr":"10.0.0.0/24","issued":[{"name":"a","nebula_ip":"10.0.0.2/24","fingerprint":"f1"}]}`), &n); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.Issued[0].History) != 0 {
+		t.Fatalf("history = %+v", n.Issued[0].History)
+	}
+	out, _ := json.Marshal(n)
+	if strings.Contains(string(out), "history") {
+		t.Errorf("empty history was written: %s", out)
+	}
+}
+
+func TestValidFingerprint(t *testing.T) {
+	good := strings.Repeat("ab12", 16)
+	if got, err := ValidFingerprint("  " + strings.ToUpper(good) + "\n"); err != nil || got != good {
+		t.Errorf("ValidFingerprint(upper) = %q, %v", got, err)
+	}
+	for _, s := range []string{"", "abc", good + "0", good[:63], strings.Repeat("g", 64), good[:63] + " ", "../../" + good[:58]} {
+		if _, err := ValidFingerprint(s); err == nil {
+			t.Errorf("accepted %q", s)
+		}
 	}
 }

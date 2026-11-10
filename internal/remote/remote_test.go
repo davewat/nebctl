@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/davewat/nebctl/internal/admin"
 	"golang.org/x/crypto/ssh"
@@ -352,5 +353,77 @@ func TestQuote(t *testing.T) {
 		if got := Quote(in); got != want {
 			t.Errorf("Quote(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// dialTrusted connects to s with sudo that needs no password.
+func dialTrusted(t *testing.T, s *server) *Conn {
+	t.Helper()
+	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKE_NOPASSWD", "1")
+	known := filepath.Join(t.TempDir(), "known_hosts")
+	o := s.opts()
+	o.Password = "pw"
+	_, err := Dial(o, known)
+	var hk *HostKeyError
+	if !errors.As(err, &hk) {
+		t.Fatalf("first dial: %v", err)
+	}
+	o.AcceptHostKey = hk.Fingerprint
+	c, err := Dial(o, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+// Guards the 2026-11 gap: a remote command on a hung host (or sudo waiting
+// for a password) used to block forever. It must end in a timeout error, and
+// the connection must work again afterwards.
+func TestCommandTimeout(t *testing.T) {
+	c := dialTrusted(t, newServer(t, "pw"))
+	old := CommandTimeout
+	CommandTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { CommandTimeout = old })
+
+	start := time.Now()
+	_, err := c.Output("sleep 5")
+	var te *TimeoutError
+	if !errors.As(err, &te) || time.Since(start) > 3*time.Second {
+		t.Fatalf("Output on a hung command: %v after %v", err, time.Since(start))
+	}
+	start = time.Now()
+	if _, _, err := c.sudo("sleep 5", nil, 300*time.Millisecond); !errors.As(err, &te) || time.Since(start) > 3*time.Second {
+		t.Fatalf("sudo on a hung command: %v", err)
+	}
+	// The dropped connection is redialled for the next command.
+	CommandTimeout = 10 * time.Second
+	if out, err := c.Output("echo ok"); err != nil || strings.TrimSpace(out) != "ok" {
+		t.Fatalf("after a timeout: %q, %v", out, err)
+	}
+}
+
+func TestAppTimeout(t *testing.T) {
+	if appTimeout([]string{"update"}) != LongTimeout || appTimeout([]string{"certs"}) != CommandTimeout {
+		t.Error("update should get the long limit and certs the ordinary one")
+	}
+}
+
+// keepAlive pings an idle connection without harm and stops when it ends.
+func TestKeepAlive(t *testing.T) {
+	c := dialTrusted(t, newServer(t, "pw"))
+	done := make(chan struct{})
+	go func() { keepAlive(c.client, 20*time.Millisecond, time.Second); close(done) }()
+	time.Sleep(150 * time.Millisecond)
+	if out, err := c.Output("echo alive"); err != nil || strings.TrimSpace(out) != "alive" {
+		t.Fatalf("after pings: %q, %v", out, err)
+	}
+	c.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("keepAlive kept running after the connection closed")
 	}
 }

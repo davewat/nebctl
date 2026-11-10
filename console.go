@@ -329,6 +329,34 @@ type issuedOut struct {
 	Online      *bool     `json:"online,omitempty"`
 }
 
+// supersededOut is an older cert of a host that a renewal or rename
+// replaced; it still works until it expires, so it can be revoked.
+type supersededOut struct {
+	Name         string    `json:"name"`
+	NebulaIP     string    `json:"nebula_ip"`
+	Fingerprint  string    `json:"fingerprint"`
+	NotAfter     time.Time `json:"not_after,omitzero"`
+	IssuedAt     time.Time `json:"issued_at,omitzero"`
+	SupersededAt time.Time `json:"superseded_at"`
+	Current      string    `json:"current"` // name of the cert that replaced it
+	Revoked      bool      `json:"revoked"`
+}
+
+func supersededList(network *netconf.Network, blocked []string) []supersededOut {
+	out := []supersededOut{}
+	for _, i := range network.Issued {
+		for _, s := range i.History {
+			if s.Expired(time.Now()) {
+				continue
+			}
+			out = append(out, supersededOut{Name: s.Name, NebulaIP: s.NebulaIP, Fingerprint: s.Fingerprint,
+				NotAfter: s.NotAfter, IssuedAt: s.IssuedAt, SupersededAt: s.SupersededAt, Current: i.Name,
+				Revoked: slices.Contains(blocked, s.Fingerprint)})
+		}
+	}
+	return out
+}
+
 func (a *app) issuedOut(i netconf.Issued, blocked []string, online map[string]bool) issuedOut {
 	o := issuedOut{Name: i.Name, NebulaIP: i.NebulaIP, Groups: i.Groups, Fingerprint: i.Fingerprint,
 		NotAfter: i.NotAfter, IssuedAt: i.IssuedAt, DaysLeft: daysLeft(i.NotAfter),
@@ -382,6 +410,7 @@ func (a *app) consoleCerts() error {
 		issued[i] = a.issuedOut(is, h.Blocklist, online)
 	}
 	out["issued"] = issued
+	out["superseded"] = supersededList(network, h.Blocklist)
 	return printJSON(out)
 }
 
@@ -504,9 +533,12 @@ func (a *app) consoleRevoke(fp string) (map[string]any, error) {
 	if err := a.requireRoot(); err != nil {
 		return nil, err
 	}
-	fp = strings.TrimSpace(fp)
-	if fp == "" {
+	if strings.TrimSpace(fp) == "" {
 		return nil, errors.New("give the cert's fingerprint with -fingerprint")
+	}
+	fp, err := netconf.ValidFingerprint(fp)
+	if err != nil {
+		return nil, err
 	}
 	h, ok, err := a.loadHost()
 	if err != nil {
@@ -529,6 +561,11 @@ func (a *app) consoleRevoke(fp string) (map[string]any, error) {
 			if i.Fingerprint == fp {
 				a.p.Printf("Revoked %s (%s). Hosts that don't have it on their blocklist still accept it.\n", i.Name, i.NebulaIP)
 			}
+			for _, s := range i.History {
+				if s.Fingerprint == fp {
+					a.p.Printf("Revoked the older cert of %s (%s). Hosts that don't have it on their blocklist still accept it.\n", s.Name, s.NebulaIP)
+				}
+			}
 		}
 	}
 	return map[string]any{"blocklist": h.Blocklist}, nil
@@ -544,6 +581,11 @@ func (a *app) consoleBlocklist(fps []string) error {
 	}
 	if !ok {
 		return errors.New("this machine is not set up yet: run `sudo nebctl`")
+	}
+	for k, fp := range fps {
+		if fps[k], err = netconf.ValidFingerprint(fp); err != nil {
+			return fmt.Errorf("%q: %w", fp, err)
+		}
 	}
 	if c := a.currentCert(); c != nil && slices.Contains(fps, c.Fingerprint) {
 		return errors.New("the list holds this machine's own cert: it would cut this machine off")

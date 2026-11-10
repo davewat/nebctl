@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,5 +197,89 @@ func TestCAInitNoPassphrase(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "NOT encrypted") || !strings.Contains(out.String(), "offline") {
 		t.Errorf("missing the unencrypted warning: %q", out.String())
+	}
+}
+
+// Guards the 2026-11 bug: a re-sign deleted the old cert before signing, so a
+// signing failure (wrong passphrase, nebula-cert error) left issued/ without
+// it while network.json still listed it.
+func TestFailedResignKeepsOldCert(t *testing.T) {
+	a := &app{root: t.TempDir(), console: true, p: prompt.New(strings.NewReader(""), io.Discard)}
+	os.MkdirAll(a.binDir(), 0o755)
+	os.MkdirAll(a.issuedDir(), 0o700)
+	// A nebula-cert that always fails, as with a wrong passphrase.
+	os.WriteFile(a.certBin(), []byte("#!/bin/sh\necho 'invalid passphrase' >&2\nexit 1\n"), 0o755)
+	os.WriteFile(a.caDirCrt(), []byte("CA"), 0o644)
+	os.WriteFile(a.caDirKey(), []byte("KEY"), 0o600)
+	old := filepath.Join(a.issuedDir(), "web01.test.internal.crt")
+	os.WriteFile(old, []byte("OLD CERT"), 0o644)
+	n := &netconf.Network{CIDR: "10.9.0.0/24"}
+	n.Record(netconf.Issued{Name: "web01.test.internal", NebulaIP: "10.9.0.2/24", Fingerprint: "f1"})
+
+	r := certReq{name: "web01.test.internal", ip: netip.MustParsePrefix("10.9.0.2/24")}
+	if _, _, err := a.issue(n, r, "", filepath.Join(t.TempDir(), "k")); err == nil || !strings.Contains(err.Error(), "invalid passphrase") {
+		t.Fatalf("issue: %v", err)
+	}
+	if data, err := os.ReadFile(old); err != nil || string(data) != "OLD CERT" {
+		t.Fatalf("the old cert is gone or changed: %q, %v", data, err)
+	}
+	if ents, _ := os.ReadDir(a.issuedDir()); len(ents) != 1 {
+		t.Errorf("scratch files left in issued/: %v", ents)
+	}
+	if got, _ := n.Find("web01.test.internal"); got.Fingerprint != "f1" || len(got.History) != 0 {
+		t.Errorf("the record changed: %+v", got)
+	}
+}
+
+// A renewal keeps the old fingerprint revocable and shows it in the console's
+// certificate list; revoking checks the fingerprint's format.
+func TestRenewKeepsOldFingerprintRevocable(t *testing.T) {
+	a := caApp(t, "")
+	first, err := a.consoleSign("web01", "", nil, false, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldFP := first["cert"].(issuedOut).Fingerprint
+	second, err := a.consoleSign("web01", "", nil, false, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second["cert"].(issuedOut).Fingerprint == oldFP {
+		t.Fatal("a re-sign gave the same cert")
+	}
+	n, err := a.loadNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup := supersededList(n, nil)
+	if len(sup) != 1 || sup[0].Fingerprint != oldFP || sup[0].Revoked || sup[0].Current != "web01.test.internal" {
+		t.Fatalf("superseded = %+v", sup)
+	}
+	if got := supersededList(n, []string{oldFP}); !got[0].Revoked {
+		t.Error("an entry on the blocklist should show as revoked")
+	}
+	// The saved file keeps it too.
+	if data, _ := os.ReadFile(a.networkFile()); !strings.Contains(string(data), oldFP) {
+		t.Error("network.json lost the old fingerprint")
+	}
+	var out strings.Builder
+	a.p = prompt.New(strings.NewReader(""), &out)
+	if err := a.caList(); err != nil || !strings.Contains(out.String(), "superseded") || !strings.Contains(out.String(), oldFP) {
+		t.Errorf("ca list: %v\n%s", err, out.String())
+	}
+}
+
+// Guards the 2026-11 gap: revoke accepted any string.
+func TestRevokeChecksFingerprintFormat(t *testing.T) {
+	a := &app{root: t.TempDir(), console: true, p: prompt.New(strings.NewReader(""), io.Discard)}
+	os.MkdirAll(a.cfgDir(), 0o755)
+	(&netconf.Host{Role: netconf.RoleLighthouse}).Save(a.stateFile())
+	for _, bad := range []string{"abc", "not hex", strings.Repeat("z", 64), strings.Repeat("a", 65)} {
+		if _, err := a.consoleRevoke(bad); err == nil || !strings.Contains(err.Error(), "64 hexadecimal") {
+			t.Errorf("revoke %q: %v", bad, err)
+		}
+		if err := a.consoleBlocklist([]string{strings.Repeat("a", 64), bad}); err == nil || !strings.Contains(err.Error(), "64 hexadecimal") {
+			t.Errorf("blocklist with %q: %v", bad, err)
+		}
 	}
 }

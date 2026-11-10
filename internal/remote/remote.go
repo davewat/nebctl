@@ -21,6 +21,20 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// Time limits for what runs over SSH. Variables so tests can shorten them.
+var (
+	// CommandTimeout bounds an ordinary remote command; a hung host or an
+	// unanswered prompt ends in an error instead of blocking forever.
+	CommandTimeout = 2 * time.Minute
+	// LongTimeout is for commands that legitimately take a while: copying
+	// the nebctl binary, and `nebctl app update`, which downloads releases.
+	LongTimeout = 10 * time.Minute
+	// KeepAliveInterval is how often an idle connection is pinged; a ping
+	// unanswered for KeepAliveTimeout closes the connection.
+	KeepAliveInterval = 30 * time.Second
+	KeepAliveTimeout  = 15 * time.Second
+)
+
 // Options say where to connect and how to log in.
 type Options struct {
 	Host          string `json:"host"`
@@ -128,7 +142,66 @@ func (c *Conn) dial() error {
 	}
 	c.client = client
 	c.KeyLogin = used
+	go keepAlive(client, KeepAliveInterval, KeepAliveTimeout)
 	return nil
+}
+
+// keepAlive pings the server until the connection ends, and closes it when a
+// ping goes unanswered, so a dead link fails the commands on it quickly.
+func keepAlive(cl *ssh.Client, every, wait time.Duration) {
+	gone := make(chan struct{})
+	go func() { cl.Wait(); close(gone) }()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-gone:
+			return
+		case <-t.C:
+			res := make(chan error, 1)
+			go func() { _, _, err := cl.SendRequest("keepalive@openssh.com", true, nil); res <- err }()
+			select {
+			case err := <-res:
+				if err != nil {
+					cl.Close()
+					return
+				}
+			case <-time.After(wait):
+				cl.Close()
+				return
+			case <-gone:
+				return
+			}
+		}
+	}
+}
+
+// run runs cmd in s, giving up after limit: it then closes the session, drops
+// the connection (it is likely hung; the next command redials) and returns a
+// timeout error. The caller must not read s's buffers after a timeout.
+func (c *Conn) run(s *ssh.Session, cmd string, limit time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- s.Run(cmd) }()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		go s.Close()
+		go c.Close()
+		return &TimeoutError{Host: c.opts.Host, Limit: limit}
+	}
+}
+
+// TimeoutError means a remote command did not finish in time.
+type TimeoutError struct {
+	Host  string
+	Limit time.Duration
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("%s did not finish the command within %s (is the host unreachable, or sudo waiting for a password?)", e.Host, e.Limit)
 }
 
 // signedSigner records that the server accepted its key: a client signs
@@ -337,7 +410,11 @@ func (c *Conn) Output(cmd string) (string, error) {
 	defer s.Close()
 	var out, errb bytes.Buffer
 	s.Stdout, s.Stderr = &out, &errb
-	if err := s.Run(cmd); err != nil {
+	if err := c.run(s, cmd, CommandTimeout); err != nil {
+		var te *TimeoutError
+		if errors.As(err, &te) {
+			return "", fmt.Errorf("%s: %w", cmd, err)
+		}
 		return out.String(), fmt.Errorf("%s: %v %s", cmd, err, strings.TrimSpace(errb.String()))
 	}
 	return out.String(), nil
@@ -351,14 +428,14 @@ func (c *Conn) checkSudo() error {
 	if c.opts.SudoPassword == "" {
 		return &NeedError{"sudoPassword", "sudo on " + c.opts.Host + " needs " + c.opts.User + "'s password"}
 	}
-	if _, _, err := c.sudo("true", nil); err != nil {
+	if _, _, err := c.sudo("true", nil, CommandTimeout); err != nil {
 		return &NeedError{"sudoPassword", "sudo didn't accept that password (is " + c.opts.User + " allowed to use sudo?)"}
 	}
 	return nil
 }
 
 // sudo runs cmd (a shell command line) as root, with input on its stdin.
-func (c *Conn) sudo(cmd string, input []byte) (stdout, stderr []byte, err error) {
+func (c *Conn) sudo(cmd string, input []byte, limit time.Duration) (stdout, stderr []byte, err error) {
 	s, err := c.session()
 	if err != nil {
 		return nil, nil, err
@@ -375,7 +452,12 @@ func (c *Conn) sudo(cmd string, input []byte) (stdout, stderr []byte, err error)
 	}
 	in.Write(input)
 	s.Stdin = &in
-	err = s.Run(line)
+	if err = c.run(s, line, limit); err != nil {
+		var te *TimeoutError
+		if errors.As(err, &te) {
+			return nil, nil, err
+		}
+	}
 	return out.Bytes(), errb.Bytes(), err
 }
 
@@ -389,7 +471,11 @@ func (c *Conn) AppInput(args []string, input []byte) ([]byte, error) {
 	for i, a := range args {
 		quoted[i] = Quote(a)
 	}
-	out, errb, err := c.sudo(Quote(c.Nebctl)+" app "+strings.Join(quoted, " "), input)
+	out, errb, err := c.sudo(Quote(c.Nebctl)+" app "+strings.Join(quoted, " "), input, appTimeout(args))
+	var te *TimeoutError
+	if errors.As(err, &te) {
+		return nil, err
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(errb))
 		msg = strings.TrimPrefix(msg, "error: ")
@@ -399,6 +485,15 @@ func (c *Conn) AppInput(args []string, input []byte) ([]byte, error) {
 		return out, errors.New(msg)
 	}
 	return out, nil
+}
+
+// appTimeout is how long `nebctl app args...` may take: updating downloads
+// releases, so it gets the long limit.
+func appTimeout(args []string) time.Duration {
+	if len(args) > 0 && args[0] == "update" {
+		return LongTimeout
+	}
+	return CommandTimeout
 }
 
 // Platform is the remote's GOOS and GOARCH.
@@ -445,7 +540,7 @@ func (c *Conn) Install(binary []byte) error {
 	dst := Quote(c.InstallPath)
 	dir := Quote(filepath.Dir(c.InstallPath))
 	script := "mkdir -p " + dir + " && cat > " + dst + ".new && chmod 0755 " + dst + ".new && mv " + dst + ".new " + dst
-	_, errb, err := c.sudo("sh -c "+Quote(script), binary)
+	_, errb, err := c.sudo("sh -c "+Quote(script), binary, LongTimeout)
 	if err != nil {
 		return fmt.Errorf("copying nebctl there: %v %s", err, strings.TrimSpace(string(errb)))
 	}

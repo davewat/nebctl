@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -363,12 +364,22 @@ func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string
 	if err := os.MkdirAll(a.issuedDir(), 0o700); err != nil {
 		return pki.Cert{}, "", err
 	}
-	// nebula-cert refuses to overwrite; a re-sign replaces the old files.
-	os.Remove(crt)
+	// nebula-cert refuses to overwrite, so sign into a scratch directory
+	// beside the final file and rename into place once it worked: a failed
+	// sign leaves the old cert as it was.
+	scratch, err := os.MkdirTemp(a.issuedDir(), ".sign-")
+	if err != nil {
+		return pki.Cert{}, "", err
+	}
+	defer os.RemoveAll(scratch)
+	opts.OutCrt = filepath.Join(scratch, name+".crt")
 	if keyPath != "" {
 		os.Remove(keyPath)
 	}
 	if err := a.tool().Sign(opts); err != nil {
+		return pki.Cert{}, "", err
+	}
+	if err := os.Rename(opts.OutCrt, crt); err != nil {
 		return pki.Cert{}, "", err
 	}
 	if keyPath != "" {
@@ -380,10 +391,9 @@ func (a *app) issue(network *netconf.Network, r certReq, pubPath, keyPath string
 	}
 	c := certs[0]
 	if r.replaces != "" {
-		network.Remove(r.replaces)
 		os.Remove(filepath.Join(a.issuedDir(), r.replaces+".crt"))
 	}
-	network.Record(netconf.Issued{Name: name, NebulaIP: ip.String(), Groups: groups,
+	network.RecordReplacing(r.replaces, netconf.Issued{Name: name, NebulaIP: ip.String(), Groups: groups,
 		Fingerprint: c.Fingerprint, NotAfter: c.NotAfter, IssuedAt: time.Now().UTC().Truncate(time.Second)})
 	if err := network.Save(a.networkFile()); err != nil {
 		return pki.Cert{}, "", err
@@ -686,13 +696,37 @@ func (a *app) caList() error {
 		a.p.Printf(", names under %s", network.Domain)
 	}
 	a.p.Printf("\n\n")
+	h, _, err := a.loadHost()
+	if err != nil {
+		return err
+	}
 	a.p.Printf("  %-28s %-18s %-12s %s\n", "NAME", "ADDRESS", "EXPIRES", "GROUPS")
+	var old []netconf.Superseded
 	for _, i := range network.Issued {
 		exp := i.NotAfter.Format("2006-01-02")
 		if d := daysLeft(i.NotAfter); d < 30 {
 			exp += fmt.Sprintf(" (%dd)", d)
 		}
 		a.p.Printf("  %-28s %-18s %-12s %s\n", i.Name, i.NebulaIP, exp, strings.Join(i.Groups, ","))
+		for _, s := range i.History {
+			if !s.Expired(time.Now()) {
+				old = append(old, s)
+			}
+		}
+	}
+	if len(old) > 0 {
+		a.p.Println("\nSuperseded certs, still accepted until they expire; revoke one with `nebctl app revoke -fingerprint`:")
+		for _, s := range old {
+			exp := "expiry unknown"
+			if !s.NotAfter.IsZero() {
+				exp = "expires " + s.NotAfter.Format("2006-01-02")
+			}
+			state := "superseded"
+			if slices.Contains(h.Blocklist, s.Fingerprint) {
+				state = "superseded, revoked"
+			}
+			a.p.Printf("  %-28s %-18s %s (%s)\n    %s\n", s.Name, s.NebulaIP, exp, state, s.Fingerprint)
+		}
 	}
 	if len(network.Lighthouses) > 0 {
 		a.p.Println("\nLighthouses:")

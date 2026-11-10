@@ -136,12 +136,26 @@ export interface IssuedCert {
   online?: boolean;
 }
 
+/** An older cert of a host that a renewal or rename replaced; it works until it expires. */
+export interface SupersededCert {
+  name: string;
+  nebulaIp: string;
+  fingerprint: string;
+  notAfter?: string;
+  issuedAt?: string;
+  supersededAt: string;
+  /** The cert that replaced it. */
+  current: string;
+  revoked: boolean;
+}
+
 export interface Certificates {
   ca: { name: string; notAfter: string; daysLeft: number; fingerprint: string };
   cidr: string;
   domain?: string;
   lighthouses: Lighthouse[];
   issued: IssuedCert[];
+  superseded?: SupersededCert[];
   blocklist: string[];
   /** Where the CA key is: in ca.key on the machine, or kept offline. */
   caKey: 'here' | 'offline';

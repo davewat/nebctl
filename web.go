@@ -40,6 +40,10 @@ import (
 
 const nebctlRepo = "davewat/nebctl"
 
+// sessionIdle is how long a console session lives without a request; each
+// request renews it. A variable so tests can shorten it.
+var sessionIdle = 30 * time.Minute
+
 type console struct {
 	a        *app
 	port     int
@@ -111,7 +115,10 @@ func (a *app) webCmd(args []string) error {
 			}
 		}()
 	}
-	srv := &http.Server{Handler: c, ReadHeaderTimeout: 10 * time.Second}
+	// No handler streams; the longest one is `update`, which may run for
+	// remote.LongTimeout on another machine, so the write limit sits above it.
+	srv := &http.Server{Handler: c, ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout: remote.LongTimeout + 2*time.Minute, IdleTimeout: 2 * time.Minute}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -176,6 +183,7 @@ func (c *console) sessionOK(r *http.Request) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.pruneSessions(time.Now())
 	for id := range c.sessions {
 		if subtle.ConstantTimeCompare([]byte(id), []byte(ck.Value)) == 1 {
 			c.sessions[id] = time.Now()
@@ -183,6 +191,15 @@ func (c *console) sessionOK(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// pruneSessions drops sessions idle for more than sessionIdle. c.mu is held.
+func (c *console) pruneSessions(now time.Time) {
+	for id, last := range c.sessions {
+		if now.Sub(last) > sessionIdle {
+			delete(c.sessions, id)
+		}
+	}
 }
 
 func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +254,7 @@ func (c *console) login(w http.ResponseWriter, r *http.Request) {
 	}
 	id := randomHex(32)
 	c.mu.Lock()
+	c.pruneSessions(time.Now())
 	c.sessions[id] = time.Now()
 	c.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})

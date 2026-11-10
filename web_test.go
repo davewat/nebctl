@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/davewat/nebctl/internal/netconf"
 )
@@ -87,5 +90,35 @@ func TestPlanCert(t *testing.T) {
 	}
 	if _, err := a.planCert(n, "bad name", "", nil, false); err == nil {
 		t.Error("a name with a space was accepted")
+	}
+}
+
+// Console sessions expire after sessionIdle without a request, a request
+// renews them, and an expired one is pruned (it used to live forever).
+func TestSessionIdleExpiry(t *testing.T) {
+	old := sessionIdle
+	sessionIdle = 200 * time.Millisecond
+	t.Cleanup(func() { sessionIdle = old })
+	c := &console{sessions: map[string]time.Time{"live": time.Now(), "stale": time.Now().Add(-time.Hour)}}
+	req := func(id string) *http.Request {
+		r := httptest.NewRequest("GET", "/api/x", nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: id})
+		return r
+	}
+	if c.sessionOK(req("stale")) {
+		t.Error("an idle session was accepted")
+	}
+	if _, ok := c.sessions["stale"]; ok {
+		t.Error("the expired session was not pruned")
+	}
+	for range 4 { // use renews: alive past 3x the idle limit
+		time.Sleep(100 * time.Millisecond)
+		if !c.sessionOK(req("live")) {
+			t.Fatal("a session in use expired")
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	if c.sessionOK(req("live")) {
+		t.Error("a session unused past the limit was accepted")
 	}
 }
