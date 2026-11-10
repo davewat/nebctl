@@ -118,6 +118,11 @@ To update nebctl itself, repeat the `curl` and `install` lines from step 2.
   It only touches ufw rules tagged `nebctl`. Check with `sudo nebctl firewall`.
 - **Revoking a cert.** Each machine keeps its own blocklist. After you revoke a
   cert, the console offers to push the list to the machines it's connected to.
+- **The CA key is encrypted by default.** `sudo nebctl ca init` (and set-up)
+  protects `ca.key` with a passphrase, asked each time you sign. Without a
+  terminal (a script), `ca init` stops unless you pass `-no-passphrase`, which
+  leaves the key unencrypted and warns you to move it offline. Existing
+  unencrypted keys keep working; `sudo nebctl audit` flags them.
 - **Back up** `/etc/nebula/ca/ca.key` on the lighthouse. Every cert expires with
   the CA (5 years by default).
 - **Keep the CA key offline.** On the console's Certificates page, **Take it off

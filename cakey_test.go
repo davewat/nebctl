@@ -134,3 +134,67 @@ func TestCheckCAKeyText(t *testing.T) {
 		}
 	}
 }
+
+// initApp is an app rooted in a temp dir with the real nebula-cert, whose
+// prompts are answered by input.
+func initApp(t *testing.T, input string) (*app, *strings.Builder) {
+	t.Helper()
+	bin, err := exec.LookPath("nebula-cert")
+	if err != nil {
+		t.Skip("nebula-cert isn't installed")
+	}
+	var out strings.Builder
+	a := &app{root: t.TempDir(), p: prompt.New(strings.NewReader(input), &out)}
+	os.MkdirAll(a.binDir(), 0o755)
+	if err := os.Symlink(bin, a.certBin()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.nebulaBin(), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return a, &out
+}
+
+// Guards the 2026-11 change: a new CA's key is encrypted by default, so a run
+// with no terminal (a script) must stop with a clear error, not hang or
+// quietly write an unencrypted key.
+func TestCAInitEncryptsByDefault(t *testing.T) {
+	// name, network, years, passphrase (blank = the default), domain
+	a, out := initApp(t, "Test CA\n10.9.0.0/24\n5\n\n\n")
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { stdinIsTerminal = func() bool { return true } })
+	err := a.caInit(false)
+	if err == nil || !strings.Contains(err.Error(), "-no-passphrase") {
+		t.Fatalf("want an error naming -no-passphrase, got %v", err)
+	}
+	if !strings.Contains(out.String(), "[Y/n]") {
+		t.Errorf("the passphrase prompt should default to yes: %q", out.String())
+	}
+	if a.haveCA() || exists(a.caDir()) {
+		t.Error("a refused init must leave no CA behind")
+	}
+}
+
+// The explicit unencrypted choice works without a terminal and without a
+// passphrase question, and warns that the key should go offline.
+func TestCAInitNoPassphrase(t *testing.T) {
+	a, out := initApp(t, "Test CA\n10.9.0.0/24\n5\n\n")
+	stdinIsTerminal = func() bool { return false }
+	t.Cleanup(func() { stdinIsTerminal = func() bool { return true } })
+	if err := a.caInit(true); err != nil {
+		t.Fatal(err)
+	}
+	key, err := os.ReadFile(a.caDirKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pki.IsEncryptedKey(key) {
+		t.Error("-no-passphrase made an encrypted key")
+	}
+	if strings.Contains(out.String(), "Protect ca.key") {
+		t.Error("-no-passphrase should not ask about a passphrase")
+	}
+	if !strings.Contains(out.String(), "NOT encrypted") || !strings.Contains(out.String(), "offline") {
+		t.Errorf("missing the unencrypted warning: %q", out.String())
+	}
+}

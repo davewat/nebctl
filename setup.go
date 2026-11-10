@@ -256,7 +256,7 @@ func (a *app) obtainCert(role string) (learned, error) {
 	} else if role == netconf.RoleLighthouse {
 		opts = append(opts,
 			option{"Create a new CA here, then sign this lighthouse's cert (a new network)", func() (learned, error) {
-				if err := a.caInit(); err != nil {
+				if err := a.caInit(false); err != nil {
 					return learned{}, err
 				}
 				return a.certFromLocalCA()

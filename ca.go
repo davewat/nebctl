@@ -32,7 +32,7 @@ func (a *app) caMenu() error {
 		}
 		switch i {
 		case 0:
-			err = a.caInit()
+			err = a.caInit(false)
 		case 1:
 			err = a.caImport("", "")
 		case 2:
@@ -64,7 +64,18 @@ func (a *app) prepareCADir() error {
 	return os.Chmod(a.caDir(), 0o700)
 }
 
-func (a *app) caInit() error {
+// stdinIsTerminal reports whether a passphrase can be asked for on the
+// terminal. A variable so tests can stand in for a terminal.
+var stdinIsTerminal = func() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// caInit creates a CA. The key is encrypted by default: nebula-cert asks for
+// the passphrase on the terminal. noPassphrase is the explicit choice to leave
+// ca.key unencrypted (`ca init -no-passphrase`), the only way to create a CA
+// from a script or any run without a terminal.
+func (a *app) caInit(noPassphrase bool) error {
 	if err := a.requireRoot(); err != nil {
 		return err
 	}
@@ -87,9 +98,16 @@ func (a *app) caInit() error {
 	if err != nil {
 		return err
 	}
-	encrypt, err := a.p.Confirm("Protect ca.key with a passphrase (asked each time you sign)?", false)
-	if err != nil {
-		return err
+	encrypt := !noPassphrase
+	if encrypt {
+		var err error
+		encrypt, err = a.p.Confirm("Protect ca.key with a passphrase (asked each time you sign)? Recommended: without one, anyone who reads ca.key can sign certs for your whole network.", true)
+		if err != nil {
+			return err
+		}
+	}
+	if encrypt && !stdinIsTerminal() {
+		return errors.New("an encrypted CA key needs a terminal to ask for its passphrase: run this in a terminal, or pass -no-passphrase to create an unencrypted key (and then move it offline)")
 	}
 	domain, err := a.askDomain(defaultDomain(name))
 	if err != nil {
@@ -119,6 +137,11 @@ func (a *app) caInit() error {
 	a.p.Printf("\nCreated CA %q for %s, valid until %s.\n", name, prefix, certs[0].NotAfter.Format("2006-01-02"))
 	a.p.Printf("Back up %s somewhere offline. Anyone holding it can add hosts to\n", a.caDirKey())
 	a.p.Println("your network, and losing it means re-issuing every cert.")
+	if !encrypt {
+		a.p.Printf("\nWARNING: %s is NOT encrypted. Anyone who reads that file can sign certs for\n", a.caDirKey())
+		a.p.Println("your whole network. Move it offline: on the console's Certificates page, choose")
+		a.p.Println("\"Take it off this machine\" (it shows the key to save, then removes it).")
+	}
 	return nil
 }
 

@@ -49,7 +49,7 @@ Nebula itself:
   service start|stop|restart|status|uninstall
 
 Certificate authority (on the machine holding ca.key):
-  ca init                    create a CA
+  ca init [-no-passphrase]   create a CA (ca.key is passphrase-protected unless -no-passphrase)
   ca import [-crt F] [-key F]          adopt an existing ca.crt and ca.key
   ca sign [-out F]           sign a cert for another host; prints a bundle with its key
   ca sign-request [-in F] [-out F]     sign a request; prints a bundle without a key
@@ -178,13 +178,14 @@ func (a *app) caCmd(args []string) error {
 	crt := fs.String("crt", "", "certificate file")
 	key := fs.String("key", "", "private key file")
 	in := fs.String("in", "", "read the request from this file instead of pasting it")
+	noPass := fs.Bool("no-passphrase", false, "ca init: leave ca.key unencrypted (needed without a terminal)")
 	out := fs.String("out", "", "write the bundle to this file instead of printing it")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch args[0] {
 	case "init":
-		return a.caInit()
+		return a.caInit(*noPass)
 	case "import":
 		return a.caImport(*crt, *key)
 	case "sign":
